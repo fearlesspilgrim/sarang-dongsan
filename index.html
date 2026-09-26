@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#F6F1EA" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="사랑동산" />
+    <meta name="description" content="사랑동산 26-2학기 일정, 구성원, 주요링크" />
+    <title>사랑동산 · 26-2</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link
+      rel="stylesheet"
+      crossorigin
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              cream: "#F6F1EA",
+              ivory: "#FBF7F2",
+              ink: "#1C1917",
+              muted: "#78716C",
+              terra: "#C45C4A",
+              sage: "#5B7C6E",
+              church: "#4C5E8A",
+              gold: "#C4A35A",
+            },
+            fontFamily: {
+              sans: ["Pretendard", "ui-sans-serif", "system-ui", "sans-serif"],
+            },
+            boxShadow: {
+              sheet: "0 -8px 32px rgba(28, 25, 23, 0.12)",
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      html,
+      body {
+        height: 100%;
+        background: #f6f1ea;
+      }
+      body {
+        min-height: 100dvh;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .tabbar-safe {
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      .hide-scroll::-webkit-scrollbar {
+        display: none;
+      }
+      .hide-scroll {
+        scrollbar-width: none;
+      }
+      @keyframes pullspin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes toast-in {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .toast-in {
+        animation: toast-in 0.18s ease-out;
+      }
+      @keyframes sheet-up {
+        from {
+          transform: translateY(100%);
+        }
+        to {
+          transform: translateY(0);
+        }
+      }
+      .sheet-up {
+        animation: sheet-up 0.22s ease-out;
+      }
+    </style>
+  </head>
+  <body class="font-sans text-ink antialiased">
+    <div id="app" class="relative mx-auto h-dvh w-full max-w-[430px] overflow-hidden bg-cream shadow-[0_0_0_1px_rgba(28,25,23,0.04)]"></div>
+    <script src="./app.js?v=2"></script>
+  </body>
+</html>
