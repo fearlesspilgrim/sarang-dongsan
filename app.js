@@ -52,7 +52,6 @@
     loginPassword: "",
     loginError: "",
     toast: "",
-    vcardHint: false,
     refreshing: false,
   };
 
@@ -173,7 +172,7 @@
 
   function formatTodaySentence(date) {
     const day = weekdayIndex(date);
-    if (day === 0) return `${date.m}월 ${date.d}일, 주일이에요`;
+    if (day === 0) return `${date.m}월 ${date.d}일 주일이에요`;
     return `${date.m}월 ${date.d}일 ${WEEKDAYS[day]}요일이에요`;
   }
 
@@ -331,12 +330,15 @@
   }
 
   async function loadAll({ silent = false } = {}) {
-    if (silent) state.refreshing = true;
-    else {
+    const started = Date.now();
+    if (silent) {
+      state.refreshing = true;
+      paintPull("refresh");
+    } else {
       state.status = "loading";
       state.error = "";
+      render();
     }
-    render();
     try {
       const [membersTable, eventsTable, placesTable, linksTable, loginTable] = await Promise.all([
         loadGviz(GIDS.members),
@@ -359,7 +361,11 @@
       }
       state.status = "ready";
       state.error = "";
-      if (silent) showToast("다시 불러왔습니다");
+      if (silent) {
+        const wait = 520 - (Date.now() - started);
+        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+        showToast("다시 불러왔습니다");
+      }
     } catch (err) {
       state.status = "error";
       state.error = err.message || "소식을 불러오지 못했습니다.";
@@ -445,10 +451,6 @@
     }, 1500);
   }
 
-  function digitsPhone(phone) {
-    return String(phone || "").replace(/\D/g, "");
-  }
-
   async function copyPhone(phone) {
     const text = String(phone || "").trim();
     try {
@@ -463,30 +465,6 @@
       area.remove();
       showToast("번호를 복사했습니다");
     }
-  }
-
-  function saveVCard(member) {
-    const tel = digitsPhone(member.phone);
-    const body = [
-      "BEGIN:VCARD",
-      "VERSION:3.0",
-      `FN:${member.name}`,
-      tel ? `TEL;TYPE=CELL:${tel}` : "",
-      "END:VCARD",
-    ]
-      .filter(Boolean)
-      .join("\r\n");
-    const blob = new Blob([body], { type: "text/vcard;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${member.name}.vcf`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    state.vcardHint = true;
-    showToast("주소록 파일을 저장했습니다");
   }
 
   function iconHome(active) {
@@ -525,7 +503,7 @@
   function eventRow(event, { compact = false, today = null } = {}) {
     const isToday = today && ymd(event.date) === ymd(today);
     return `
-      <div class="flex items-start gap-3 ${isToday ? "rounded-2xl bg-terra/10 px-2 py-2 -mx-2" : "py-2"}">
+      <div class="flex gap-3 ${isToday ? "items-center rounded-2xl bg-terra/10 px-2 pt-2 pb-3 -mx-2" : "items-start py-2"}">
         <div class="w-10 shrink-0 pt-0.5 text-center">
           <div class="relative text-[15px] font-semibold leading-none ${isToday ? "text-terra" : "text-ink"}">
             ${event.date.d}
@@ -581,9 +559,8 @@
     const selected = state.members.find((m) => m.name === state.loginName);
     return `
       <div class="flex min-h-dvh flex-col px-5 pb-10 pt-16">
-        <p class="text-[13px] font-medium tracking-wide text-terra">사랑동산 · 26-2학기</p>
-        <h1 class="mt-2 text-[28px] font-semibold leading-tight">들어가기</h1>
-        <p class="mt-2 text-[15px] text-muted">이름을 고르고 공통 비밀번호를 입력해 주세요.</p>
+        <p class="text-[13px] font-medium tracking-wide text-terra">사랑동산</p>
+        <h1 class="mt-2 text-[28px] font-semibold leading-tight">사랑하기</h1>
 
         <label class="mt-10 text-[13px] font-medium text-muted">이름</label>
         <button data-action="open-name-picker" class="mt-2 flex h-[52px] items-center justify-between rounded-2xl border border-stone-200 bg-ivory px-4 text-left">
@@ -598,7 +575,7 @@
 
         ${state.loginError ? `<p class="mt-3 text-[13px] text-terra">${esc(state.loginError)}</p>` : ""}
 
-        <button data-action="login" class="mt-8 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory">들어가기</button>
+        <button data-action="login" class="mt-8 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory">사랑하기</button>
       </div>
       ${state.namePickerOpen ? namePicker() : ""}`;
   }
@@ -655,12 +632,12 @@
 
   function namePicker() {
     return `
-      <div class="absolute inset-0 z-40 bg-ink/30" data-action="close-name-picker"></div>
-      <div class="absolute inset-x-0 bottom-0 z-50 rounded-t-[28px] bg-ivory p-5 shadow-sheet sheet-up">
-        <div class="mx-auto mb-4 h-1 w-10 rounded-full bg-stone-300"></div>
+      <div id="name-picker-backdrop" class="absolute inset-0 z-40 bg-ink/30" data-action="close-name-picker"></div>
+      <div id="name-picker" class="absolute inset-x-0 bottom-0 z-50 rounded-t-[28px] bg-ivory px-5 pb-5 pt-1 shadow-sheet sheet-up">
+        <div data-sheet-handle class="-mx-5 flex h-8 items-center justify-center" style="touch-action: none" aria-hidden="true">
+          <span class="h-1 w-10 rounded-full bg-stone-300"></span>
+        </div>
         <p class="text-[17px] font-semibold">이름 선택</p>
-        <input data-field="member-query" type="search" placeholder="이름 찾기"
-          class="mt-3 h-11 w-full rounded-2xl bg-cream px-4 text-[15px] outline-none" value="${esc(state.memberQuery)}" />
         <div id="name-picker-list" class="mt-3 max-h-[50vh] overflow-y-auto hide-scroll">
           ${namePickerListHtml()}
         </div>
@@ -705,7 +682,8 @@
   function linksView() {
     return `
       <header class="px-5 pt-6">
-        <h1 class="text-[24px] font-semibold">주요링크</h1>
+        <p class="text-[13px] font-medium text-terra">사랑동산</p>
+        <h1 class="mt-3 text-[24px] font-semibold">주요링크</h1>
         <p class="mt-2 text-[13px] text-muted">자주 여는 페이지를 모아 두었어요</p>
       </header>
       <div class="mt-5 space-y-3 px-5 pb-6">
@@ -744,14 +722,14 @@
     return `
       <header class="px-5 pt-6">
         <p class="text-[13px] font-medium text-terra">사랑동산</p>
-        <h1 class="mt-3 text-[22px] font-semibold leading-tight">안녕하세요, ${esc(member?.name || "")}님</h1>
+        <h1 class="mt-3 text-[24px] font-semibold">안녕하세요, ${esc(member?.name || "")}님</h1>
         <p class="mt-2 text-[13px] text-muted">${esc(formatTodaySentence(today))}</p>
       </header>
 
       <section class="mx-5 mt-6 rounded-[24px] border border-stone-200/80 bg-ivory p-5">
         <div class="flex items-baseline justify-between gap-3">
           <h2 class="text-[18px] font-semibold">이번 주 일정</h2>
-          <span class="shrink-0 rounded-md bg-stone-200/80 px-2 py-1 text-[13px] font-semibold text-stone-600">${esc(formatRange(range.start, range.end))}</span>
+          <span class="shrink-0 text-[13px] font-medium text-stone-400">${esc(formatRange(range.start, range.end))}</span>
         </div>
         <div class="mt-3 divide-y divide-stone-100">
           ${
@@ -808,7 +786,7 @@
     return ymd(weekRange(a.date).start) === ymd(weekRange(b.date).start);
   }
 
-  function scheduleRows(events, today) {
+  function scheduleRows(events, today, anchorYmd) {
     const days = [];
     for (const event of events) {
       const last = days[days.length - 1];
@@ -822,16 +800,75 @@
         const line = linked
           ? `<div class="absolute -left-2.5 top-[17.5px] -bottom-[33.5px] w-px -translate-x-1/2 bg-stone-200"></div>`
           : "";
-        return `<div class="relative mb-4">${line}${scheduleDay(day, today)}</div>`;
+        const isAnchor = anchorYmd != null && ymd(day[0].date) === anchorYmd;
+        return `<div class="relative mb-4"${isAnchor ? " data-schedule-anchor" : ""}>${line}${scheduleDay(day, today)}</div>`;
       })
       .join("");
   }
 
+  function scheduleAnchorYmd(groups, today) {
+    if (!today) return null;
+    const todayN = ymd(today);
+    for (const group of groups) {
+      for (const event of group.events) {
+        if (ymd(event.date) >= todayN) return ymd(event.date);
+      }
+    }
+    return null;
+  }
+
+  function scrollScheduleToToday() {
+    const scroller = document.getElementById("main-scroll");
+    const target = scroller?.querySelector("[data-schedule-anchor]");
+    if (!scroller || !target) return;
+    const header = scroller.querySelector("header");
+    const month = target.closest(".mb-5")?.querySelector("h2");
+    const headerH = header ? header.offsetHeight : 0;
+    const monthH = month ? month.offsetHeight : 0;
+    const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    scroller.scrollTop = Math.max(0, top - headerH - monthH);
+  }
+
+  let scheduleJumpToToday = true;
+  let scheduleScrollTop = 0;
+  let scheduleDomFresh = false;
+  let scheduleScrollToken = 0;
+
+  function captureScheduleScroll() {
+    if (state.tab !== "schedule" || scheduleJumpToToday || scheduleDomFresh) return;
+    const scroller = document.getElementById("main-scroll");
+    if (!scroller) return;
+    scheduleScrollTop = scroller.scrollTop;
+  }
+
+  function queueScheduleScroll() {
+    if (state.tab !== "schedule") {
+      scheduleDomFresh = false;
+      return;
+    }
+    const token = ++scheduleScrollToken;
+    const jump = scheduleJumpToToday;
+    const keep = scheduleScrollTop;
+    scheduleDomFresh = true;
+    requestAnimationFrame(() => {
+      if (token !== scheduleScrollToken) return;
+      const scroller = document.getElementById("main-scroll");
+      if (!scroller) return;
+      if (jump) scrollScheduleToToday();
+      else scroller.scrollTop = keep;
+      scheduleJumpToToday = false;
+      scheduleScrollTop = scroller.scrollTop;
+      scheduleDomFresh = false;
+    });
+  }
+
   function scheduleView(today) {
     const groups = groupedEvents();
+    const anchorYmd = scheduleAnchorYmd(groups, today);
     return `
       <header class="sticky top-0 z-30 bg-cream px-5 pb-3 pt-6">
-        <h1 class="text-[24px] font-semibold">이번 텀 일정</h1>
+        <p class="text-[13px] font-medium text-terra">사랑동산</p>
+        <h1 class="mt-3 text-[24px] font-semibold">이번 텀 일정</h1>
         <div class="mt-3 flex gap-1.5 overflow-x-auto hide-scroll">
           ${FILTERS.map((f) => {
             const on = state.scheduleFilter === f;
@@ -848,7 +885,7 @@
             <div class="mb-5">
               <h2 class="sticky top-[var(--schedule-sticky,7.5rem)] z-20 -mx-5 bg-cream px-5 py-2 text-[13px] font-semibold text-muted">${esc(group.title)}</h2>
               <div class="relative z-0 pl-5">
-                ${scheduleRows(group.events, today)}
+                ${scheduleRows(group.events, today, anchorYmd)}
               </div>
             </div>`
                 )
@@ -861,7 +898,8 @@
   function membersView() {
     return `
       <header class="px-5 pt-6">
-        <h1 class="text-[24px] font-semibold">구성원</h1>
+        <p class="text-[13px] font-medium text-terra">사랑동산</p>
+        <h1 class="mt-3 text-[24px] font-semibold">구성원</h1>
       </header>
       <div id="member-list" class="mt-4 px-5 pb-4">
         ${memberListHtml()}
@@ -872,9 +910,11 @@
     const m = state.selectedMember;
     if (!m) return "";
     return `
-      <div class="absolute inset-0 z-40 bg-ink/30" data-action="close-member"></div>
-      <div class="absolute inset-x-0 bottom-0 z-50 rounded-t-[28px] bg-ivory px-5 pb-8 pt-4 shadow-sheet sheet-up">
-        <div class="mx-auto mb-4 h-1 w-10 rounded-full bg-stone-300"></div>
+      <div id="member-sheet-backdrop" class="absolute inset-0 z-40 bg-ink/30" data-action="close-member"></div>
+      <div id="member-sheet" class="absolute inset-x-0 bottom-0 z-50 rounded-t-[28px] bg-ivory px-5 pb-8 pt-1 shadow-sheet sheet-up" style="touch-action: none">
+        <div data-sheet-handle class="-mx-5 flex h-8 items-center justify-center" aria-hidden="true">
+          <span class="h-1 w-10 rounded-full bg-stone-300"></span>
+        </div>
         <div class="flex items-center gap-3">
           <span class="flex h-12 w-12 items-center justify-center rounded-full font-semibold leading-none whitespace-nowrap ${initialClass(m.name, "text-[16px]", "text-[14px] tracking-tight")} ${peerTint(m.peer)}">${esc(initialOf(m.name))}</span>
           <div>
@@ -886,9 +926,7 @@
           m.phone
             ? `
           <p class="mt-6 text-center text-[28px] font-semibold tracking-wide">${esc(m.phone)}</p>
-          <button data-action="save-vcard" class="mt-5 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory">주소록에 저장</button>
-          <button data-action="copy-phone" class="mt-2 h-[52px] w-full rounded-2xl border border-stone-200 text-[16px] font-medium">번호 복사</button>
-          ${state.vcardHint ? `<p class="mt-3 text-center text-[12px] leading-relaxed text-muted">카톡 안에서 파일이 열리지 않으면, 번호가 복사되어 있습니다. Safari에서 열면 주소록 저장이 더 잘 됩니다.</p>` : ""}`
+          <button data-action="copy-phone" class="mt-5 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory">번호 복사</button>`
             : `<p class="mt-6 text-center text-[14px] text-muted">등록된 전화번호가 없습니다</p>`
         }
       </div>`;
@@ -900,6 +938,7 @@
   }
 
   function render() {
+    captureScheduleScroll();
     if (state.status === "loading") {
       appEl.innerHTML = skeleton();
       return;
@@ -911,10 +950,7 @@
     if (!state.sessionName) {
       appEl.innerHTML = loginView() + toastView();
       bind();
-      if (state.namePickerOpen) {
-        const search = appEl.querySelector("[data-field='member-query']");
-        search?.focus();
-      }
+      bindSheetDrag("name-picker", "name-picker-backdrop", "close-name-picker", { handleOnly: true });
       return;
     }
 
@@ -929,11 +965,13 @@
     appEl.innerHTML = `
       <div class="flex h-full min-h-0 flex-col overflow-hidden bg-cream">
         <div id="main-scroll" class="min-h-0 flex-1 overflow-y-auto hide-scroll overscroll-y-contain pb-4">
-          <div id="pull-indicator" class="flex items-center justify-center overflow-hidden text-terra" style="height:0">
-            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M20 12a8 8 0 1 1-2.3-5.7" stroke-linecap="round"/>
-              <path d="M20 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
+          <div id="pull-indicator" class="flex items-center justify-center overflow-hidden" style="height:0">
+            <div id="pull-badge" class="flex h-10 w-10 items-center justify-center rounded-full border border-terra/40 bg-ivory text-terra shadow-sm">
+              <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                <path d="M20 12a8 8 0 1 1-2.3-5.7" stroke-linecap="round"/>
+                <path d="M20 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
           </div>
           ${body}
         </div>
@@ -943,6 +981,7 @@
       ${toastView()}`;
     bind();
     bindPullToRefresh();
+    bindSheetDrag("member-sheet", "member-sheet-backdrop", "close-member");
     if (scheduleStickyObserver) {
       scheduleStickyObserver.disconnect();
       scheduleStickyObserver = null;
@@ -953,6 +992,68 @@
       scheduleStickyObserver = new ResizeObserver(() => syncScheduleSticky());
       scheduleStickyObserver.observe(stickyHeader);
     }
+    queueScheduleScroll();
+  }
+
+  function bindSheetDrag(sheetId, backdropId, closeAction, { handleOnly = false } = {}) {
+    const sheet = document.getElementById(sheetId);
+    const backdrop = document.getElementById(backdropId);
+    if (!sheet) return;
+    let startY = 0;
+    let dragging = false;
+    let delta = 0;
+    let pointerId = null;
+    let closeTimer = 0;
+
+    function closeSheet() {
+      handleAction(closeAction);
+    }
+
+    sheet.addEventListener("pointerdown", (event) => {
+      if (handleOnly && !event.target.closest("[data-sheet-handle]")) return;
+      if (event.target.closest("button")) return;
+      clearTimeout(closeTimer);
+      dragging = true;
+      startY = event.clientY;
+      delta = 0;
+      pointerId = event.pointerId;
+      sheet.classList.remove("sheet-up");
+      sheet.style.transition = "none";
+      if (backdrop) backdrop.style.transition = "none";
+      try {
+        sheet.setPointerCapture(event.pointerId);
+      } catch {
+        /* already captured or unsupported */
+      }
+    });
+
+    sheet.addEventListener("pointermove", (event) => {
+      if (!dragging || event.pointerId !== pointerId) return;
+      delta = Math.max(0, event.clientY - startY);
+      if (delta > 0 && event.cancelable) event.preventDefault();
+      sheet.style.transform = `translateY(${delta}px)`;
+      if (backdrop) backdrop.style.opacity = String(Math.max(0.2, 1 - delta / 280));
+    });
+
+    function end(event) {
+      if (!dragging || event.pointerId !== pointerId) return;
+      dragging = false;
+      const height = sheet.getBoundingClientRect().height || 1;
+      const shouldClose = delta > Math.min(110, height * 0.22);
+      sheet.style.transition = "transform 0.22s ease";
+      if (backdrop) backdrop.style.transition = "opacity 0.22s ease";
+      if (shouldClose) {
+        sheet.style.transform = "translateY(110%)";
+        if (backdrop) backdrop.style.opacity = "0";
+        closeTimer = window.setTimeout(closeSheet, 200);
+        return;
+      }
+      sheet.style.transform = "translateY(0)";
+      if (backdrop) backdrop.style.opacity = "";
+    }
+
+    sheet.addEventListener("pointerup", end);
+    sheet.addEventListener("pointercancel", end);
   }
 
   function bindList(root) {
@@ -967,52 +1068,112 @@
     });
   }
 
+  function paintPull(mode, distance = 0) {
+    const indicator = document.getElementById("pull-indicator");
+    const badge = document.getElementById("pull-badge");
+    const icon = badge?.querySelector("svg");
+    if (!indicator || !badge || !icon) return;
+    if (mode === "hidden") {
+      indicator.style.height = "0px";
+      badge.style.opacity = "0";
+      badge.classList.remove("pull-ready", "pull-spin");
+      icon.style.transform = "";
+      return;
+    }
+    if (mode === "refresh") {
+      indicator.style.height = "64px";
+      badge.style.opacity = "1";
+      badge.classList.add("pull-ready", "pull-spin");
+      icon.style.transform = "";
+      return;
+    }
+    const ready = distance > 72;
+    indicator.style.height = `${Math.min(distance * 0.62, 76)}px`;
+    badge.style.opacity = String(Math.min(1, 0.35 + distance / 80));
+    badge.classList.toggle("pull-ready", ready);
+    badge.classList.remove("pull-spin");
+    icon.style.transform = `rotate(${Math.min(distance * 2.4, 220)}deg)`;
+  }
+
   function bindPullToRefresh() {
     const scroller = document.getElementById("main-scroll");
-    const indicator = document.getElementById("pull-indicator");
-    if (!scroller || !indicator) return;
+    if (!scroller) return;
     let startY = 0;
     let pulling = false;
-    let pullDistance = 0;
+    let armed = false;
+    let distance = 0;
+    let pointerId = null;
 
-    function setPull(distance) {
-      pullDistance = Math.max(0, distance);
-      const height = Math.min(pullDistance, 64);
-      const icon = indicator.querySelector("svg");
-      indicator.style.height = `${height}px`;
-      if (!icon) return;
-      icon.style.animation = state.refreshing ? "pullspin 0.8s linear infinite" : "none";
-      icon.style.transform = state.refreshing ? "" : `rotate(${Math.min(pullDistance * 2, 180)}deg)`;
+    function begin(y, id) {
+      if (scroller.scrollTop > 2 || state.refreshing) return;
+      startY = y;
+      pulling = true;
+      armed = false;
+      distance = 0;
+      pointerId = id ?? null;
     }
 
-    scroller.addEventListener("pointerdown", (event) => {
-      if (scroller.scrollTop > 0 || state.refreshing) return;
-      startY = event.clientY;
-      pulling = true;
-      pullDistance = 0;
-    });
-    scroller.addEventListener("pointermove", (event) => {
+    function move(y, event) {
+      if (!pulling || state.refreshing) return;
+      const dy = y - startY;
+      if (dy > 8 && scroller.scrollTop <= 2) {
+        armed = true;
+        distance = dy;
+        if (pointerId != null) {
+          try {
+            scroller.setPointerCapture(pointerId);
+          } catch {
+            /* already captured or unsupported */
+          }
+        }
+        if (event.cancelable) event.preventDefault();
+        paintPull("pull", dy);
+        return;
+      }
+      if (dy <= 0) {
+        distance = 0;
+        armed = false;
+        paintPull("hidden");
+      }
+    }
+
+    function end() {
       if (!pulling) return;
-      const dy = event.clientY - startY;
-      if (dy > 0 && scroller.scrollTop <= 0) setPull(dy);
-      else setPull(0);
-    });
-    function endPull() {
-      if (!pulling) return;
-      const shouldRefresh = pullDistance > 56 && !state.refreshing;
+      const shouldRefresh = armed && distance > 72 && !state.refreshing;
       pulling = false;
-      pullDistance = 0;
+      armed = false;
+      pointerId = null;
+      distance = 0;
       if (shouldRefresh) {
-        const icon = indicator.querySelector("svg");
-        indicator.style.height = "36px";
-        if (icon) icon.style.animation = "pullspin 0.8s linear infinite";
+        paintPull("refresh");
         loadAll({ silent: true });
         return;
       }
-      indicator.style.height = "0";
+      paintPull("hidden");
     }
-    scroller.addEventListener("pointerup", endPull);
-    scroller.addEventListener("pointercancel", endPull);
+
+    scroller.addEventListener("pointerdown", (event) => begin(event.clientY, event.pointerId));
+    scroller.addEventListener("pointermove", (event) => move(event.clientY, event));
+    scroller.addEventListener("pointerup", end);
+    scroller.addEventListener("pointercancel", end);
+    scroller.addEventListener(
+      "touchstart",
+      (event) => {
+        if (event.touches.length !== 1) return;
+        begin(event.touches[0].clientY, null);
+      },
+      { passive: true }
+    );
+    scroller.addEventListener(
+      "touchmove",
+      (event) => {
+        if (event.touches.length !== 1) return;
+        move(event.touches[0].clientY, event);
+      },
+      { passive: false }
+    );
+    scroller.addEventListener("touchend", end);
+    scroller.addEventListener("touchcancel", end);
   }
 
   function bind() {
@@ -1021,14 +1182,6 @@
       el.addEventListener("input", () => {
         const field = el.getAttribute("data-field");
         if (field === "password") state.loginPassword = el.value;
-        if (field === "member-query") {
-          state.memberQuery = el.value;
-          const box = document.getElementById("name-picker-list");
-          if (box) {
-            box.innerHTML = namePickerListHtml();
-            bindList(box);
-          }
-        }
       });
       if (el.getAttribute("data-field") === "password") {
         el.addEventListener("keydown", (event) => {
@@ -1090,7 +1243,9 @@
       return;
     }
     if (action === "tab") {
-      state.tab = el.getAttribute("data-tab");
+      const next = el.getAttribute("data-tab");
+      if (next === "schedule") scheduleJumpToToday = true;
+      state.tab = next;
       state.memberQuery = "";
       state.selectedMember = null;
       location.hash = state.tab;
@@ -1098,6 +1253,7 @@
       return;
     }
     if (action === "filter") {
+      scheduleJumpToToday = true;
       state.scheduleFilter = el.getAttribute("data-filter");
       render();
       return;
@@ -1105,25 +1261,16 @@
     if (action === "open-member") {
       const name = el.getAttribute("data-name");
       state.selectedMember = state.members.find((m) => m.name === name) || null;
-      state.vcardHint = false;
       render();
       return;
     }
     if (action === "close-member") {
       state.selectedMember = null;
-      state.vcardHint = false;
       render();
       return;
     }
     if (action === "copy-phone" && state.selectedMember) {
       copyPhone(state.selectedMember.phone);
-      return;
-    }
-    if (action === "save-vcard" && state.selectedMember) {
-      const phone = state.selectedMember.phone;
-      saveVCard(state.selectedMember);
-      navigator.clipboard?.writeText(String(phone || "").trim()).catch(() => {});
-      return;
     }
   }
 
@@ -1131,6 +1278,7 @@
     if (!state.sessionName) return;
     const tab = location.hash.replace("#", "");
     if (TABS.includes(tab) && tab !== state.tab) {
+      if (tab === "schedule") scheduleJumpToToday = true;
       state.tab = tab;
       render();
     }

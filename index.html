@@ -58,6 +58,19 @@
       .hide-scroll {
         scrollbar-width: none;
       }
+      #pull-badge {
+        opacity: 0;
+        transition: background-color 0.16s ease, color 0.16s ease, transform 0.16s ease, border-color 0.16s ease, opacity 0.12s linear;
+      }
+      #pull-badge.pull-ready {
+        background: #c45c4a;
+        color: #fbf7f2;
+        border-color: #c45c4a;
+        transform: scale(1.08);
+      }
+      #pull-badge.pull-spin svg {
+        animation: pullspin 0.65s linear infinite;
+      }
       @keyframes pullspin {
         to {
           transform: rotate(360deg);
@@ -91,6 +104,6 @@
   </head>
   <body class="font-sans text-ink antialiased">
     <div id="app" class="relative mx-auto h-dvh w-full max-w-[430px] overflow-hidden bg-cream shadow-[0_0_0_1px_rgba(28,25,23,0.04)]"></div>
-    <script src="./app.js?v=2"></script>
+    <script src="./app.js?v=7"></script>
   </body>
 </html>
