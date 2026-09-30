@@ -41,7 +41,10 @@
     events: [],
     places: {},
     links: [],
+    roster: [],
+    rosterReady: false,
     password: "",
+    scheduleVersion: "",
     sessionName: null,
     tab: "home",
     scheduleFilter: "전체",
@@ -111,14 +114,60 @@
   }
 
   function seoulToday() {
+    const now = seoulNow();
+    return { y: now.y, m: now.m, d: now.d };
+  }
+
+  function seoulNow() {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "Asia/Seoul",
       year: "numeric",
       month: "numeric",
       day: "numeric",
+      hour: "numeric",
+      hourCycle: "h23",
     }).formatToParts(new Date());
     const get = (type) => Number(parts.find((p) => p.type === type).value);
-    return { y: get("year"), m: get("month"), d: get("day") };
+    return { y: get("year"), m: get("month"), d: get("day"), h: get("hour") };
+  }
+
+  const TIME_LINES = [
+    { from: 5, to: 11, lines: ["좋은 아침이에요", "아침부터 반가워요"] },
+    { from: 11, to: 14, lines: ["점심은 맛있게 먹었나요?", "점심시간은 잘 보내고 있나요?"] },
+    { from: 14, to: 18, lines: ["오후도 편하게 보내고 있나요?", "나른한 오후예요"] },
+    { from: 18, to: 22, lines: ["저녁은 맛있게 드셨나요?", "오늘 하루도 수고했어요"] },
+    { from: 22, to: 5, lines: ["늦은 시간이네요", "오늘도 고생 많았어요"] },
+  ];
+
+  function timeGreeting(now = seoulNow()) {
+    const band =
+      TIME_LINES.find((item) =>
+        item.from < item.to ? now.h >= item.from && now.h < item.to : now.h >= item.from || now.h < item.to
+      ) || TIME_LINES[TIME_LINES.length - 1];
+    return band.lines[(now.y * 10000 + now.m * 100 + now.d) % band.lines.length];
+  }
+
+  function parseScheduleVersion(table) {
+    const item = cell(table?.rows?.[0] || {}, 0);
+    const formatted = String(item.f || "").trim();
+    if (formatted) return formatted;
+    const raw = item.v;
+    if (raw == null || raw === "") return "";
+    if (typeof raw === "string" && raw.startsWith("Date(")) {
+      const date = parseGvizDate(raw, "");
+      if (!date?.y) return "";
+      const yy = String(date.y).slice(-2);
+      const mm = String(date.m).padStart(2, "0");
+      const dd = String(date.d).padStart(2, "0");
+      return `${yy}.${mm}.${dd}`;
+    }
+    return String(raw).trim();
+  }
+
+  function scheduleVersionLabel(version) {
+    const text = String(version || "").trim();
+    if (!text) return "";
+    return /ver\.?$/i.test(text) ? text : `${text} ver.`;
   }
 
   function weekRange(today) {
@@ -170,12 +219,6 @@
     return `${date.m}/${date.d}`;
   }
 
-  function formatTodaySentence(date) {
-    const day = weekdayIndex(date);
-    if (day === 0) return `${date.m}월 ${date.d}일 주일이에요`;
-    return `${date.m}월 ${date.d}일 ${WEEKDAYS[day]}요일이에요`;
-  }
-
   function formatRange(start, end) {
     return `${start.m}/${start.d}–${end.m}/${end.d}`;
   }
@@ -184,9 +227,9 @@
     return `${date.y}년 ${date.m}월`;
   }
 
-  function loadGviz(gid) {
+  function loadGviz(gid, query = "") {
     return new Promise((resolve, reject) => {
-      const cb = `gviz_cb_${gid}_${Date.now()}_${Math.floor(Math.random() * 1e5)}`;
+      const cb = `gviz_cb_${gid || "sheet"}_${Date.now()}_${Math.floor(Math.random() * 1e5)}`;
       const script = document.createElement("script");
       const timer = setTimeout(() => {
         cleanup();
@@ -205,7 +248,8 @@
         else reject(new Error("시트 응답이 올바르지 않습니다."));
       };
 
-      script.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=responseHandler:${cb}&gid=${gid}&t=${Date.now()}`;
+      const gidPart = gid ? `&gid=${gid}` : "";
+      script.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=responseHandler:${cb}${gidPart}${query}&t=${Date.now()}`;
       script.onerror = () => {
         cleanup();
         reject(new Error("시트를 불러오지 못했습니다."));
@@ -288,6 +332,69 @@
     return { kind: "link", hint: host || "링크" };
   }
 
+  function parseRoster(table) {
+    if (!table) return [];
+    return (table.rows || [])
+      .map((row) => {
+        const leader = String(cell(row, 0).v || "").trim();
+        const name = String(cell(row, 1).v || "").trim();
+        if (!leader || !name || leader === "순장 이름") return null;
+        const kind = String(cell(row, 2).v || "").trim();
+        const gender = String(cell(row, 4).v || "").trim();
+        const peerCell = cell(row, 5);
+        const peer =
+          peerCell.v == null || peerCell.v === "" ? "" : formatPeer(peerCell.v, peerCell.f);
+        return { leader, name, kind, gender, peer };
+      })
+      .filter(Boolean);
+  }
+
+  const DIARY_FORM_ID = "1FAIpQLSfB-_uUD9dw3CkCqjIA4-rduND0Qi-sPDnwmn6sNmHUq3JJ7g";
+  const DIARY_ENTRY = {
+    role: "830871812",
+    name: "1040802585",
+    headcount: "294826557",
+    present: "2130633796",
+  };
+
+  function diaryRole(member) {
+    return String(member?.role || "").includes("지기") ? "동산지기" : "순장";
+  }
+
+  function rosterTag(person) {
+    const peer = String(person.peer || "").trim();
+    const gender = String(person.gender || "").trim();
+    if (peer && gender) return `${person.name}(${peer}/${gender})`;
+    if (gender) return `${person.name}(${gender})`;
+    if (peer) return `${person.name}(${peer})`;
+    return person.name;
+  }
+
+  function presentRosterText(people) {
+    return people.map((person) => `${rosterTag(person)} /  /`).join("\n");
+  }
+
+  function diaryPeople(member) {
+    const keeper = String(member.role || "").includes("지기");
+    return state.roster.filter((row) => row.leader === member.name && (keeper || row.kind === "순원"));
+  }
+
+  function diaryHref(link) {
+    const member = currentMember();
+    if (link.label !== "양육일기" || !member) return link.url;
+    const people = diaryPeople(member);
+    const params = new URLSearchParams();
+    params.set("usp", "pp_url");
+    params.set(`entry.${DIARY_ENTRY.role}`, diaryRole(member));
+    params.set(`entry.${DIARY_ENTRY.name}`, member.name);
+    if (state.rosterReady) {
+      params.set(`entry.${DIARY_ENTRY.headcount}`, `/ ${people.length + 1}`);
+      const present = presentRosterText(people);
+      if (present) params.set(`entry.${DIARY_ENTRY.present}`, present);
+    }
+    return `https://docs.google.com/forms/d/e/${DIARY_FORM_ID}/viewform?${params.toString()}`;
+  }
+
   function parseLinks(table) {
     return (table.rows || [])
       .map((row) => {
@@ -340,18 +447,29 @@
       render();
     }
     try {
-      const [membersTable, eventsTable, placesTable, linksTable, loginTable] = await Promise.all([
-        loadGviz(GIDS.members),
-        loadGviz(GIDS.schedule),
-        loadGviz(GIDS.places),
-        loadGviz(GIDS.links),
-        loadGviz(GIDS.login),
-      ]);
+      const versionPromise = loadGviz(GIDS.schedule, "&range=J1&headers=0").catch(() => null);
+      const rosterPromise = loadGviz(
+        "",
+        `&sheet=${encodeURIComponent("순원정보")}&headers=1`
+      ).catch(() => null);
+      const [membersTable, eventsTable, placesTable, linksTable, loginTable, versionTable, rosterTable] =
+        await Promise.all([
+          loadGviz(GIDS.members),
+          loadGviz(GIDS.schedule),
+          loadGviz(GIDS.places),
+          loadGviz(GIDS.links),
+          loadGviz(GIDS.login),
+          versionPromise,
+          rosterPromise,
+        ]);
       state.members = parseMembers(membersTable);
       state.events = parseEvents(eventsTable);
       state.places = parsePlaces(placesTable);
       state.links = parseLinks(linksTable);
+      state.roster = parseRoster(rosterTable);
+      state.rosterReady = Boolean(rosterTable);
       state.password = parsePassword(loginTable);
+      state.scheduleVersion = parseScheduleVersion(versionTable);
       const saved = readSession();
       state.sessionName =
         saved && state.members.some((m) => m.name === saved) ? saved : null;
@@ -608,22 +726,19 @@
       return `<p class="mt-10 text-center text-[14px] text-muted">등록된 구성원이 없습니다</p>`;
     }
     return `
-      <div class="overflow-hidden rounded-[20px] border border-stone-200/80 bg-ivory">
+      <div class="grid grid-cols-2 gap-2">
         ${list
-          .map((m, i) => {
-            const isMe = m.name === state.sessionName;
+          .map((m) => {
             return `
-            <button data-action="open-member" data-name="${esc(m.name)}" class="flex w-full items-center gap-3 px-3 py-3 text-left ${i ? "border-t border-stone-100" : ""}">
-              <span class="flex h-11 w-11 items-center justify-center rounded-full font-semibold leading-none whitespace-nowrap ${initialClass(m.name, "text-[15px]", "text-[13px] tracking-tight")} ${peerTint(m.peer)}">${esc(initialOf(m.name))}</span>
+            <button data-action="open-member" data-name="${esc(m.name)}" class="flex h-full items-center gap-1 rounded-[24px] border border-stone-200/80 bg-ivory py-3 pl-3.5 pr-2.5 text-left active:bg-cream">
               <span class="min-w-0 flex-1">
-                <span class="flex items-center gap-1.5">
+                <span class="flex flex-wrap items-center gap-1">
                   <span class="text-[16px] font-medium">${esc(m.name)}</span>
-                  ${isMe ? '<span class="rounded-full bg-terra/15 px-1.5 py-0.5 text-[10px] font-semibold text-terra">나</span>' : ""}
-                  ${m.role ? `<span class="rounded-full border border-terra/30 px-1.5 py-0.5 text-[10px] font-medium text-terra">${esc(m.role)}</span>` : ""}
+                  ${m.role ? `<span class="shrink-0 rounded-full border border-terra/30 px-1.5 py-0.5 text-[10px] font-medium leading-none text-terra">${esc(m.role)}</span>` : ""}
                 </span>
-                <span class="mt-0.5 block text-[12px] text-muted">${esc(m.peer)}또래 · ${formatMd(m.birth) || "생일 미등록"}</span>
+                <span class="mt-1 block text-[12px] text-muted">${esc(m.peer)}또래 · ${formatMd(m.birth) || "생일 미등록"}</span>
               </span>
-              <span class="text-muted">›</span>
+              <span class="shrink-0 text-[16px] leading-none text-stone-400" aria-hidden="true">›</span>
             </button>`;
           })
           .join("")}
@@ -669,7 +784,7 @@
   function linkCard(link) {
     const style = LINK_STYLE[link.kind] || LINK_STYLE.link;
     return `
-      <a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 rounded-[22px] border border-stone-200/80 bg-ivory px-4 py-3.5 active:bg-cream">
+      <a href="${esc(diaryHref(link))}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-3.5 active:bg-cream">
         <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${style}">${linkGlyph(link.kind)}</span>
         <span class="min-w-0 flex-1">
           <span class="block truncate text-[16px] font-medium">${esc(link.label)}</span>
@@ -684,9 +799,9 @@
       <header class="px-5 pt-6">
         <p class="text-[13px] font-medium text-terra">사랑동산</p>
         <h1 class="mt-3 text-[24px] font-semibold">주요링크</h1>
-        <p class="mt-2 text-[13px] text-muted">자주 여는 페이지를 모아 두었어요</p>
+        <p class="mt-2 text-[13px] text-muted">자주 사용하게 될 링크를 모아 두었어요</p>
       </header>
-      <div class="mt-5 space-y-3 px-5 pb-6">
+      <div class="mt-6 space-y-3 px-5 pb-6">
         ${
           state.links.length
             ? state.links.map(linkCard).join("")
@@ -715,6 +830,12 @@
       </nav>`;
   }
 
+  function greetingName(member) {
+    if (!member?.name) return "";
+    const title = String(member.role || "").includes("지기") ? "지기" : "순장";
+    return `${member.name} ${title}님`;
+  }
+
   function homeView(today, range) {
     const member = currentMember();
     const events = weekEvents(range);
@@ -722,8 +843,8 @@
     return `
       <header class="px-5 pt-6">
         <p class="text-[13px] font-medium text-terra">사랑동산</p>
-        <h1 class="mt-3 text-[24px] font-semibold">안녕하세요, ${esc(member?.name || "")}님</h1>
-        <p class="mt-2 text-[13px] text-muted">${esc(formatTodaySentence(today))}</p>
+        <h1 class="mt-3 text-[24px] font-semibold">안녕하세요, ${esc(greetingName(member))}</h1>
+        <p class="mt-2 text-[13px] text-muted">${esc(timeGreeting())}</p>
       </header>
 
       <section class="mx-5 mt-6 rounded-[24px] border border-stone-200/80 bg-ivory p-5">
@@ -869,7 +990,8 @@
       <header class="sticky top-0 z-30 bg-cream px-5 pb-3 pt-6">
         <p class="text-[13px] font-medium text-terra">사랑동산</p>
         <h1 class="mt-3 text-[24px] font-semibold">이번 텀 일정</h1>
-        <div class="mt-3 flex gap-1.5 overflow-x-auto hide-scroll">
+        ${scheduleVersionLabel(state.scheduleVersion) ? `<p class="mt-2 text-[13px] text-muted">${esc(scheduleVersionLabel(state.scheduleVersion))}</p>` : ""}
+        <div class="mt-6 flex gap-1.5 overflow-x-auto hide-scroll">
           ${FILTERS.map((f) => {
             const on = state.scheduleFilter === f;
             return `<button data-action="filter" data-filter="${f}" class="shrink-0 rounded-full px-2.5 py-1.5 text-[13px] font-medium ${on ? "bg-terra text-ivory" : "bg-ivory text-muted border border-stone-200"}">${f}</button>`;
@@ -900,8 +1022,9 @@
       <header class="px-5 pt-6">
         <p class="text-[13px] font-medium text-terra">사랑동산</p>
         <h1 class="mt-3 text-[24px] font-semibold">구성원</h1>
+        <p class="mt-2 text-[13px] leading-snug text-muted">내가 너희를 사랑한 것 같이 서로 사랑하라(요15:12)</p>
       </header>
-      <div id="member-list" class="mt-4 px-5 pb-4">
+      <div id="member-list" class="mt-6 px-5 pb-4">
         ${memberListHtml()}
       </div>`;
   }
@@ -915,12 +1038,9 @@
         <div data-sheet-handle class="-mx-5 flex h-8 items-center justify-center" aria-hidden="true">
           <span class="h-1 w-10 rounded-full bg-stone-300"></span>
         </div>
-        <div class="flex items-center gap-3">
-          <span class="flex h-12 w-12 items-center justify-center rounded-full font-semibold leading-none whitespace-nowrap ${initialClass(m.name, "text-[16px]", "text-[14px] tracking-tight")} ${peerTint(m.peer)}">${esc(initialOf(m.name))}</span>
-          <div>
-            <p class="text-[18px] font-semibold">${esc(m.name)}</p>
-            <p class="text-[13px] text-muted">${esc(m.peer)}또래${m.role ? ` · ${esc(m.role)}` : ""} · 생일 ${formatMd(m.birth) || "미등록"}</p>
-          </div>
+        <div>
+          <p class="text-[18px] font-semibold">${esc(m.name)}</p>
+          <p class="text-[13px] text-muted">${esc(m.peer)}또래${m.role ? ` · ${esc(m.role)}` : ""} · 생일 ${formatMd(m.birth) || "미등록"}</p>
         </div>
         ${
           m.phone
