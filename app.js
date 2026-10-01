@@ -7,7 +7,12 @@
     links: "782002476",
     login: "1674760346",
   };
-  const TABS = ["home", "schedule", "members", "links"];
+  const TABS = ["home", "schedule", "members", "coram", "links"];
+  const CORAM_SCRIPT_URL =
+    "https://script.google.com/macros/s/AKfycbyrIsEa1O3gueu7MOthSELphC86xVwQnZWf3YY8IkZXZPLkqHVu0g4XVXrz7XyaSJQd/exec";
+  const CORAM_DAYS = ["월", "화", "수", "목", "금", "토", "일"];
+  const CORAM_DEFAULT_READ = 3;
+  const CORAM_DEFAULT_PRAY = 20;
   const SESSION_KEY = "sarang_lbs_session_v1";
   const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
   const CAT_STYLE = {
@@ -45,6 +50,14 @@
     rosterReady: false,
     password: "",
     scheduleVersion: "",
+    coramRows: [],
+    coramReady: false,
+    coramOffset: 0,
+    coramDrafts: {},
+    coramSave: "idle",
+    coramError: "",
+    coramGoalEdit: null,
+    coramGoalDraft: null,
     sessionName: null,
     tab: "home",
     scheduleFilter: "전체",
@@ -355,6 +368,9 @@
     name: "1040802585",
     headcount: "294826557",
     present: "2130633796",
+    read: "1376005647",
+    pray: "1036247086",
+    qt: "1996792481",
   };
 
   function diaryRole(member) {
@@ -379,6 +395,18 @@
     return state.roster.filter((row) => row.leader === member.name && (keeper || row.kind === "순원"));
   }
 
+  function coramDayCount(flags) {
+    return (flags || []).filter(Boolean).length;
+  }
+
+  function coramDiaryRecord() {
+    if (!state.coramReady || !state.sessionName) return null;
+    const week = coramWeekKey(0);
+    const draft = state.coramDrafts[week];
+    if (draft && draft.name === state.sessionName) return draft;
+    return state.coramRows.find((row) => row.name === state.sessionName && row.week === week) || null;
+  }
+
   function diaryHref(link) {
     const member = currentMember();
     if (link.label !== "양육일기" || !member) return link.url;
@@ -392,7 +420,200 @@
       const present = presentRosterText(people);
       if (present) params.set(`entry.${DIARY_ENTRY.present}`, present);
     }
+    const record = coramDiaryRecord();
+    if (record) {
+      params.set(`entry.${DIARY_ENTRY.read}`, `하루 ${record.readGoal}장 / ${coramDayCount(record.readDays)}일`);
+      params.set(`entry.${DIARY_ENTRY.pray}`, `하루 ${record.prayGoal}분 / ${coramDayCount(record.prayDays)}일`);
+      params.set(`entry.${DIARY_ENTRY.qt}`, `${Math.min(6, coramDayCount(record.qtDays))}일`);
+    }
     return `https://docs.google.com/forms/d/e/${DIARY_FORM_ID}/viewform?${params.toString()}`;
+  }
+
+  function isoDate(date) {
+    return `${date.y}-${String(date.m).padStart(2, "0")}-${String(date.d).padStart(2, "0")}`;
+  }
+
+  function coramWeekStart(offset = state.coramOffset) {
+    return addDays(weekRange(seoulToday()).start, offset * 7);
+  }
+
+  function coramWeekKey(offset = state.coramOffset) {
+    return isoDate(coramWeekStart(offset));
+  }
+
+  function coramFlag(value) {
+    if (value === true || value === 1) return true;
+    const text = String(value ?? "").trim().toLowerCase();
+    return text === "1" || text === "true" || text === "y" || text === "o" || text === "예";
+  }
+
+  function coramGoal(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.round(n);
+  }
+
+  function coramWeekValue(item) {
+    const raw = item?.v;
+    if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) return raw.trim();
+    const formatted = String(item?.f || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(formatted)) return formatted;
+    const date = parseGvizDate(raw, item?.f);
+    return date?.y ? isoDate(date) : "";
+  }
+
+  function parseCoram(table) {
+    if (!table) return [];
+    const headers = {};
+    (table.cols || []).forEach((col, index) => {
+      const label = String(col.label || "").trim();
+      if (label) headers[label] = index;
+    });
+    const pick = (row, label) => cell(row, headers[label] ?? -1);
+    return (table.rows || [])
+      .map((row) => {
+        const name = String(pick(row, "이름").v || "").trim();
+        const week = coramWeekValue(pick(row, "주시작"));
+        if (!name || name === "이름" || !week) return null;
+        const days = (prefix, count) =>
+          CORAM_DAYS.slice(0, count).map((label) => coramFlag(pick(row, `${prefix}${label}`).v));
+        return {
+          name,
+          week,
+          readGoal: coramGoal(pick(row, "통독장").v, CORAM_DEFAULT_READ),
+          readDays: days("통독", 7),
+          prayGoal: coramGoal(pick(row, "기도분").v, CORAM_DEFAULT_PRAY),
+          prayDays: days("기도", 7),
+          qtDays: days("QT", 6),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function latestCoramGoals() {
+    const byWeek = {};
+    for (const row of state.coramRows) {
+      if (row.name === state.sessionName) byWeek[row.week] = row;
+    }
+    for (const draft of Object.values(state.coramDrafts)) {
+      if (draft?.name === state.sessionName) byWeek[draft.week] = draft;
+    }
+    const mine = Object.values(byWeek).sort((a, b) => (a.week < b.week ? 1 : -1));
+    return {
+      readGoal: mine[0]?.readGoal || CORAM_DEFAULT_READ,
+      prayGoal: mine[0]?.prayGoal || CORAM_DEFAULT_PRAY,
+    };
+  }
+
+  function coramRecordFor(week) {
+    if (state.coramDrafts[week]) return state.coramDrafts[week];
+    const existing = state.coramRows.find((row) => row.name === state.sessionName && row.week === week);
+    if (existing) return existing;
+    const goals = latestCoramGoals();
+    return {
+      name: state.sessionName,
+      week,
+      readGoal: goals.readGoal,
+      readDays: [false, false, false, false, false, false, false],
+      prayGoal: goals.prayGoal,
+      prayDays: [false, false, false, false, false, false, false],
+      qtDays: [false, false, false, false, false, false],
+    };
+  }
+
+  function ensureCoramDraft(week) {
+    if (!state.coramDrafts[week]) state.coramDrafts[week] = cloneCoram(coramRecordFor(week));
+    state.coramDrafts[week].name = state.sessionName;
+    state.coramDrafts[week].week = week;
+    return state.coramDrafts[week];
+  }
+
+  function upsertCoramRow(record) {
+    const next = cloneCoram(record);
+    const index = state.coramRows.findIndex((row) => row.name === next.name && row.week === next.week);
+    if (index === -1) state.coramRows.push(next);
+    else state.coramRows[index] = next;
+  }
+
+  let coramSaveTimer = null;
+  let coramSaveSeq = 0;
+
+  function scheduleCoramSave() {
+    state.coramSave = "saving";
+    state.coramError = "";
+    clearTimeout(coramSaveTimer);
+    coramSaveTimer = setTimeout(() => {
+      flushCoramSave();
+    }, 400);
+  }
+
+  function postCoram(record) {
+    return new Promise((resolve, reject) => {
+      if (!CORAM_SCRIPT_URL) {
+        reject(new Error("unconfigured"));
+        return;
+      }
+      const cb = `coram_cb_${Date.now()}_${Math.floor(Math.random() * 1e5)}`;
+      const script = document.createElement("script");
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("timeout"));
+      }, 15000);
+      function cleanup() {
+        clearTimeout(timer);
+        delete window[cb];
+        script.remove();
+      }
+      window[cb] = (payload) => {
+        cleanup();
+        if (payload?.ok) resolve(payload);
+        else reject(new Error(payload?.error || "save"));
+      };
+      const payload = encodeURIComponent(
+        JSON.stringify({
+          password: state.password,
+          name: record.name,
+          week: record.week,
+          readGoal: record.readGoal,
+          readDays: record.readDays,
+          prayGoal: record.prayGoal,
+          prayDays: record.prayDays,
+          qtDays: record.qtDays,
+        })
+      );
+      script.src = `${CORAM_SCRIPT_URL}?callback=${cb}&payload=${payload}&t=${Date.now()}`;
+      script.onerror = () => {
+        cleanup();
+        reject(new Error("network"));
+      };
+      document.body.appendChild(script);
+    });
+  }
+
+  async function flushCoramSave() {
+    const week = coramWeekKey();
+    const draft = state.coramDrafts[week];
+    if (!draft || !state.sessionName) return;
+    const seq = ++coramSaveSeq;
+    const snapshot = cloneCoram(draft);
+    state.coramSave = "saving";
+    try {
+      await postCoram(snapshot);
+      if (seq !== coramSaveSeq) return;
+      upsertCoramRow(snapshot);
+      state.coramSave = "saved";
+      state.coramError = "";
+    } catch (err) {
+      if (seq !== coramSaveSeq) return;
+      state.coramSave = "error";
+      state.coramError =
+        err?.message === "unconfigured"
+          ? "시트로 보내는 주소를 아직 연결하지 못했어요"
+          : err?.message === "auth"
+            ? "이 이름으로는 시트에 남길 수 없어요"
+            : "시트에 남기지 못했어요";
+    }
+    if (state.tab === "coram" && state.status === "ready" && state.sessionName) renderKeepingScroll();
   }
 
   function parseLinks(table) {
@@ -452,7 +673,11 @@
         "",
         `&sheet=${encodeURIComponent("순원정보")}&headers=1`
       ).catch(() => null);
-      const [membersTable, eventsTable, placesTable, linksTable, loginTable, versionTable, rosterTable] =
+      const coramPromise = loadGviz(
+        "",
+        `&sheet=${encodeURIComponent("코람데오")}&headers=1`
+      ).catch(() => null);
+      const [membersTable, eventsTable, placesTable, linksTable, loginTable, versionTable, rosterTable, coramTable] =
         await Promise.all([
           loadGviz(GIDS.members),
           loadGviz(GIDS.schedule),
@@ -461,6 +686,7 @@
           loadGviz(GIDS.login),
           versionPromise,
           rosterPromise,
+          coramPromise,
         ]);
       state.members = parseMembers(membersTable);
       state.events = parseEvents(eventsTable);
@@ -468,6 +694,9 @@
       state.links = parseLinks(linksTable);
       state.roster = parseRoster(rosterTable);
       state.rosterReady = Boolean(rosterTable);
+      state.coramRows = parseCoram(coramTable);
+      state.coramReady = Boolean(coramTable);
+      if (state.coramSave !== "saving" && state.coramSave !== "error") state.coramDrafts = {};
       state.password = parsePassword(loginTable);
       state.scheduleVersion = parseScheduleVersion(versionTable);
       const saved = readSession();
@@ -594,8 +823,23 @@
   function iconPeople(active) {
     return `<svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="${active ? "2.2" : "1.8"}"><circle cx="9" cy="8" r="3"/><path d="M4 19c.5-3 2.4-5 5-5s4.5 2 5 5"/><circle cx="16.5" cy="8.5" r="2.4"/><path d="M16 14.2c2.2.3 3.8 2.2 4.3 4.8"/></svg>`;
   }
+  function cloneCoram(record) {
+    return {
+      name: record.name,
+      week: record.week,
+      readGoal: record.readGoal,
+      readDays: record.readDays.slice(),
+      prayGoal: record.prayGoal,
+      prayDays: record.prayDays.slice(),
+      qtDays: record.qtDays.slice(),
+    };
+  }
+
   function iconLink(active) {
     return `<svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="${active ? "2.2" : "1.8"}" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.4l1.6-1.6a5 5 0 0 0-7.1-7.1L10.6 6"/><path d="M14 11a5 5 0 0 0-7.5-.4L4.9 12.2a5 5 0 0 0 7.1 7.1l1.4-1.4"/></svg>`;
+  }
+  function iconCoram(active) {
+    return `<svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="${active ? "2.2" : "1.8"}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.2c-1.7-1.1-3.7-1.7-6.2-1.7v13.4c2.5 0 4.5.6 6.2 1.7 1.7-1.1 3.7-1.7 6.2-1.7V4.5c-2.5 0-4.5.6-6.2 1.7z"/><path d="M12 6.2v13.4"/></svg>`;
   }
 
   function chip(category) {
@@ -810,6 +1054,108 @@
       </div>`;
   }
 
+  function cancelCoramGoalEdit() {
+    state.coramGoalEdit = null;
+    state.coramGoalDraft = null;
+  }
+
+  function coramDayButtons(kind, flags, weekStart) {
+    const today = seoulToday();
+    const isCurrent = coramWeekKey(0) === isoDate(weekStart);
+    const todayIndex = isCurrent ? (weekdayIndex(today) === 0 ? 6 : weekdayIndex(today) - 1) : -1;
+    return `<div class="grid grid-cols-7 gap-1.5">${CORAM_DAYS.map((label, index) => {
+      const todayMark = index === todayIndex;
+      const shown = todayMark ? "오늘" : label;
+      const size = todayMark ? "text-[11px]" : "text-[13px]";
+      if (index >= flags.length) {
+        const quietLabel = todayMark ? "오늘은 QT에 포함되지 않아요" : "일요일은 QT에 포함되지 않아요";
+        return `<span aria-disabled="true" aria-label="${quietLabel}" class="flex aspect-square w-full items-center justify-center rounded-full border border-dashed border-stone-200 bg-stone-100 font-semibold text-stone-300 ${size}">${shown}</span>`;
+      }
+      const on = Boolean(flags[index]);
+      const tone = on ? "border border-terra bg-terra text-ivory" : "border border-stone-200 bg-ivory text-ink";
+      return `<button type="button" data-action="coram-day" data-kind="${kind}" data-index="${index}" aria-pressed="${on ? "true" : "false"}" aria-label="${shown} ${on ? "함" : "안 함"}" class="flex aspect-square w-full items-center justify-center rounded-full font-semibold ${size} ${tone}">${shown}</button>`;
+    }).join("")}</div>`;
+  }
+
+  function coramGoalRow(kind, value, unit) {
+    const editing = state.coramGoalEdit === kind;
+    const shown = editing ? state.coramGoalDraft : value;
+    const pencil = `<svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>`;
+    if (!editing) {
+      return `
+        <div class="flex items-center gap-1">
+          <p class="text-[12px] text-muted">하루에</p>
+          <p class="text-[15px] font-semibold">${shown}${unit}</p>
+          <button type="button" data-action="coram-goal-edit" data-kind="${kind}" class="flex h-7 w-7 items-center justify-center rounded-full text-stone-400" aria-label="하루 목표 수정">${pencil}</button>
+        </div>`;
+    }
+    return `
+      <div class="flex items-center">
+        <p class="mr-0.5 text-[12px] text-muted">하루에</p>
+        <button type="button" data-action="coram-goal" data-kind="${kind}" data-step="-1" class="flex h-7 w-6 items-center justify-center text-[15px] leading-none text-stone-400" aria-label="${unit} 줄이기">−</button>
+        <p class="min-w-[2.6rem] text-center text-[15px] font-semibold">${shown}${unit}</p>
+        <button type="button" data-action="coram-goal" data-kind="${kind}" data-step="1" class="flex h-7 w-6 items-center justify-center text-[15px] leading-none text-stone-400" aria-label="${unit} 늘리기">+</button>
+        <button type="button" data-action="coram-goal-commit" data-kind="${kind}" class="ml-1 rounded-full bg-terra px-2.5 py-1 text-[12px] font-semibold text-ivory">결단</button>
+      </div>`;
+  }
+
+  function coramCard({ title, aside = "", body }) {
+    return `
+      <section class="rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4">
+        <div class="mb-3 flex items-center justify-between gap-3">
+          <h2 class="text-[16px] font-semibold">${title}</h2>
+          ${aside}
+        </div>
+        ${body}
+      </section>`;
+  }
+
+  function coramStatus() {
+    if (state.coramSave === "saving") return `<p class="pt-1 text-center text-[12px] text-muted">기록을 저장하고 있어요</p>`;
+    if (state.coramSave === "saved") return `<p class="pt-1 text-center text-[12px] text-muted">기록이 저장되었어요</p>`;
+    if (state.coramSave === "error") {
+      return `<div class="pt-1 text-center"><p class="text-[12px] text-terra">${esc(state.coramError || "시트에 남기지 못했어요")}</p><button type="button" data-action="coram-retry" class="mt-2 text-[13px] font-medium text-terra">다시 저장</button></div>`;
+    }
+    return "";
+  }
+
+  function coramView() {
+    const start = coramWeekStart();
+    const end = addDays(start, 6);
+    const week = coramWeekKey();
+    const record = coramRecordFor(week);
+    const weekLabel = state.coramOffset === 0 ? `이번 주 · ${formatRange(start, end)}` : formatRange(start, end);
+    const nextMuted = state.coramOffset >= 0;
+    return `
+      <header class="px-5 pt-6">
+        <p class="text-[13px] font-medium text-terra">사랑동산</p>
+        <h1 class="mt-3 text-[24px] font-semibold">나의 코람데오</h1>
+        <p class="mt-2 text-[13px] text-muted">한 주간 하나님 앞에 나아간 기록</p>
+      </header>
+      <div class="mt-6 space-y-3 px-5 pb-6">
+        <div class="flex items-center justify-between rounded-[24px] border border-stone-200/80 bg-ivory px-2 py-2">
+          <button type="button" data-action="coram-week" data-step="-1" class="flex h-10 w-10 items-center justify-center rounded-full text-[20px] leading-none text-ink" aria-label="이전 주">‹</button>
+          <p class="text-[14px] font-medium">${esc(weekLabel)}</p>
+          <button type="button" data-action="coram-week" data-step="1" class="flex h-10 w-10 items-center justify-center rounded-full text-[20px] leading-none ${nextMuted ? "text-stone-300" : "text-ink"}" ${nextMuted ? "disabled" : ""} aria-label="다음 주">›</button>
+        </div>
+        ${coramCard({
+          title: "기도",
+          aside: coramGoalRow("pray", record.prayGoal, "분"),
+          body: coramDayButtons("pray", record.prayDays, start),
+        })}
+        ${coramCard({
+          title: "통독",
+          aside: coramGoalRow("read", record.readGoal, "장"),
+          body: coramDayButtons("read", record.readDays, start),
+        })}
+        ${coramCard({
+          title: "QT",
+          body: coramDayButtons("qt", record.qtDays, start),
+        })}
+        ${coramStatus()}
+      </div>`;
+  }
+
   function tabbar() {
     const tab = (id, label, icon) => {
       const on = state.tab === id;
@@ -825,6 +1171,7 @@
           ${tab("home", "홈", iconHome)}
           ${tab("schedule", "일정", iconCal)}
           ${tab("members", "구성원", iconPeople)}
+          ${tab("coram", "코람데오", iconCoram)}
           ${tab("links", "주요링크", iconLink)}
         </div>
       </nav>`;
@@ -1079,6 +1426,7 @@
     let body = "";
     if (state.tab === "schedule") body = scheduleView(today);
     else if (state.tab === "members") body = membersView();
+    else if (state.tab === "coram") body = coramView();
     else if (state.tab === "links") body = linksView();
     else body = homeView(today, range);
 
@@ -1113,6 +1461,22 @@
       scheduleStickyObserver.observe(stickyHeader);
     }
     queueScheduleScroll();
+    if (restoreScroll && state.tab === restoreScroll.tab) {
+      const scroller = document.getElementById("main-scroll");
+      if (scroller) scroller.scrollTop = restoreScroll.top;
+    }
+    restoreScroll = null;
+  }
+
+  let restoreScroll = null;
+
+  function renderKeepingScroll() {
+    const scroller = document.getElementById("main-scroll");
+    restoreScroll = {
+      tab: state.tab,
+      top: scroller ? scroller.scrollTop : 0,
+    };
+    render();
   }
 
   function bindSheetDrag(sheetId, backdropId, closeAction, { handleOnly = false } = {}) {
@@ -1364,6 +1728,11 @@
     }
     if (action === "tab") {
       const next = el.getAttribute("data-tab");
+      if (state.tab === "coram" && next !== "coram") {
+        cancelCoramGoalEdit();
+        clearTimeout(coramSaveTimer);
+        flushCoramSave();
+      }
       if (next === "schedule") scheduleJumpToToday = true;
       state.tab = next;
       state.memberQuery = "";
@@ -1391,6 +1760,63 @@
     }
     if (action === "copy-phone" && state.selectedMember) {
       copyPhone(state.selectedMember.phone);
+      return;
+    }
+    if (action === "coram-week") {
+      const step = Number(el.getAttribute("data-step"));
+      const nextOffset = state.coramOffset + (step < 0 ? -1 : 1);
+      if (nextOffset > 0) return;
+      cancelCoramGoalEdit();
+      clearTimeout(coramSaveTimer);
+      flushCoramSave();
+      state.coramOffset = nextOffset;
+      render();
+      return;
+    }
+    if (action === "coram-day") {
+      const kind = el.getAttribute("data-kind");
+      const index = Number(el.getAttribute("data-index"));
+      const draft = ensureCoramDraft(coramWeekKey());
+      const list = kind === "pray" ? draft.prayDays : kind === "read" ? draft.readDays : draft.qtDays;
+      if (!list || !Number.isInteger(index) || index < 0 || index >= list.length) return;
+      list[index] = !list[index];
+      scheduleCoramSave();
+      renderKeepingScroll();
+      return;
+    }
+    if (action === "coram-goal-edit") {
+      const kind = el.getAttribute("data-kind");
+      const record = coramRecordFor(coramWeekKey());
+      state.coramGoalEdit = kind;
+      state.coramGoalDraft = kind === "read" ? record.readGoal : record.prayGoal;
+      renderKeepingScroll();
+      return;
+    }
+    if (action === "coram-goal") {
+      const kind = el.getAttribute("data-kind");
+      const step = Number(el.getAttribute("data-step"));
+      if (state.coramGoalEdit !== kind || state.coramGoalDraft == null) return;
+      if (kind === "read") state.coramGoalDraft = Math.min(30, Math.max(1, state.coramGoalDraft + step));
+      if (kind === "pray") state.coramGoalDraft = Math.min(180, Math.max(5, state.coramGoalDraft + step * 5));
+      renderKeepingScroll();
+      return;
+    }
+    if (action === "coram-goal-commit") {
+      const kind = el.getAttribute("data-kind");
+      if (state.coramGoalEdit !== kind || state.coramGoalDraft == null) return;
+      const draft = ensureCoramDraft(coramWeekKey());
+      if (kind === "read") draft.readGoal = state.coramGoalDraft;
+      if (kind === "pray") draft.prayGoal = state.coramGoalDraft;
+      cancelCoramGoalEdit();
+      scheduleCoramSave();
+      renderKeepingScroll();
+      return;
+    }
+    if (action === "coram-retry") {
+      const draft = state.coramDrafts[coramWeekKey()];
+      if (!draft) return;
+      scheduleCoramSave();
+      renderKeepingScroll();
     }
   }
 
