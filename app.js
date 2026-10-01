@@ -13,6 +13,10 @@
   const CORAM_DAYS = ["월", "화", "수", "목", "금", "토", "일"];
   const CORAM_DEFAULT_READ = 3;
   const CORAM_DEFAULT_PRAY = 20;
+  const CORAM_TERM = {
+    start: { y: 2026, m: 9, d: 13 },
+    end: { y: 2027, m: 3, d: 13 },
+  };
   const SESSION_KEY = "sarang_lbs_session_v1";
   const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
   const CAT_STYLE = {
@@ -58,6 +62,9 @@
     coramError: "",
     coramGoalEdit: null,
     coramGoalDraft: null,
+    coramPane: "week",
+    coramLook: null,
+    coramFocus: "",
     sessionName: null,
     tab: "home",
     scheduleFilter: "전체",
@@ -1119,7 +1126,175 @@
     return "";
   }
 
-  function coramView() {
+  function parseIsoDate(text) {
+    const match = String(text || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]) };
+  }
+
+  function daysInMonth(y, m) {
+    return new Date(Date.UTC(y, m, 0)).getUTCDate();
+  }
+
+  function shiftMonth(month, delta) {
+    const next = new Date(Date.UTC(month.y, month.m - 1 + delta, 1));
+    return { y: next.getUTCFullYear(), m: next.getUTCMonth() + 1 };
+  }
+
+  function sameMonth(a, b) {
+    return a.y === b.y && a.m === b.m;
+  }
+
+  function coramInTerm(date) {
+    const n = ymd(date);
+    return n >= ymd(CORAM_TERM.start) && n <= ymd(CORAM_TERM.end);
+  }
+
+  function coramMonthKey(month) {
+    return month.y * 12 + month.m;
+  }
+
+  function coramMonthInTerm(month) {
+    const n = coramMonthKey(month);
+    return n >= coramMonthKey(CORAM_TERM.start) && n <= coramMonthKey(CORAM_TERM.end);
+  }
+
+  function coramTermMonths() {
+    const months = [];
+    let cursor = { y: CORAM_TERM.start.y, m: CORAM_TERM.start.m };
+    while (coramMonthInTerm(cursor)) {
+      months.push(cursor);
+      cursor = shiftMonth(cursor, 1);
+    }
+    return months;
+  }
+
+  function coramActiveMonth() {
+    const today = seoulToday();
+    const month = state.coramLook?.y ? state.coramLook : { y: today.y, m: today.m };
+    if (coramMonthKey(month) < coramMonthKey(CORAM_TERM.start)) return { y: CORAM_TERM.start.y, m: CORAM_TERM.start.m };
+    if (coramMonthKey(month) > coramMonthKey(CORAM_TERM.end)) return { y: CORAM_TERM.end.y, m: CORAM_TERM.end.m };
+    return month;
+  }
+
+  function coramDayMap() {
+    const byWeek = {};
+    for (const row of state.coramRows) {
+      if (row.name === state.sessionName) byWeek[row.week] = row;
+    }
+    for (const draft of Object.values(state.coramDrafts)) {
+      if (draft?.name === state.sessionName) byWeek[draft.week] = draft;
+    }
+    const map = {};
+    for (const row of Object.values(byWeek)) {
+      const start = parseIsoDate(row.week);
+      if (!start) continue;
+      for (let index = 0; index < 7; index += 1) {
+        const date = addDays(start, index);
+        map[isoDate(date)] = {
+          pray: Boolean(row.prayDays[index]),
+          read: Boolean(row.readDays[index]),
+          qt: index < 6 ? Boolean(row.qtDays[index]) : false,
+          goalPray: row.prayGoal,
+          goalRead: row.readGoal,
+        };
+      }
+    }
+    return map;
+  }
+
+  function coramApplies(date) {
+    return weekdayIndex(date) === 0 ? ["pray", "read"] : ["pray", "read", "qt"];
+  }
+
+  function coramLevel(entry, date) {
+    if (!entry) return 0;
+    const keys = coramApplies(date);
+    const done = keys.filter((key) => entry[key]).length;
+    if (done === 0) return 0;
+    if (done === keys.length) return 2;
+    return 1;
+  }
+
+  function coramMonthStats(map, month) {
+    const today = seoulToday();
+    const total = daysInMonth(month.y, month.m);
+    const stats = { pray: 0, read: 0, qt: 0 };
+    for (let day = 1; day <= total; day += 1) {
+      const date = { y: month.y, m: month.m, d: day };
+      if (!coramInTerm(date) || ymd(date) > ymd(today)) continue;
+      const entry = map[isoDate(date)];
+      if (!entry) continue;
+      if (entry.pray) stats.pray += 1;
+      if (entry.read) stats.read += 1;
+      if (weekdayIndex(date) !== 0 && entry.qt) stats.qt += 1;
+    }
+    return stats;
+  }
+
+  function coramMonthCells(month) {
+    const first = { y: month.y, m: month.m, d: 1 };
+    const lead = weekdayIndex(first) === 0 ? 6 : weekdayIndex(first) - 1;
+    const cells = Array(lead).fill(null);
+    const total = daysInMonth(month.y, month.m);
+    for (let day = 1; day <= total; day += 1) cells.push({ y: month.y, m: month.m, d: day });
+    while (cells.length % 7) cells.push(null);
+    return cells;
+  }
+
+  function coramOffsetForDate(date) {
+    const target = weekRange(date).start;
+    const current = weekRange(seoulToday()).start;
+    const diff = Date.UTC(target.y, target.m - 1, target.d) - Date.UTC(current.y, current.m - 1, current.d);
+    return Math.round(diff / (7 * 86400000));
+  }
+
+  function coramDayDetail(entry, date) {
+    const marks = [
+      ["pray", "기도"],
+      ["read", "통독"],
+    ];
+    if (weekdayIndex(date) !== 0) marks.push(["qt", "QT"]);
+    const checks = marks
+      .map(([key, label]) => {
+        const on = Boolean(entry?.[key]);
+        return `<span class="inline-flex items-center gap-1 text-[13px] ${on ? "font-semibold text-ink" : "text-stone-400"}"><span aria-hidden="true">${on ? "✓" : "–"}</span>${label}</span>`;
+      })
+      .join("");
+    if (!entry) {
+      return `<p class="mt-1 text-[13px] text-muted">남긴 기록이 없어요</p>`;
+    }
+    return `
+      <p class="mt-1 text-[13px] text-muted">목표 기도 ${entry.goalPray}분 · 통독 ${entry.goalRead}장</p>
+      <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1">${checks}</div>`;
+  }
+
+  function coramFillClass(level, date) {
+    const today = seoulToday();
+    const quiet = "bg-[#E4DCD0] text-stone-600";
+    if (ymd(date) === ymd(today) && level < 2) return "bg-white text-ink";
+    if (!coramInTerm(date)) return "bg-[#F3EFE8] text-stone-400";
+    if (ymd(date) > ymd(today) || level === 0) return quiet;
+    if (level === 2) return "bg-terra text-ivory";
+    if (level === 1) return "bg-[#E8C7C0] text-ink";
+    return quiet;
+  }
+
+  function scrollCoramTo(id) {
+    requestAnimationFrame(() => {
+      const scroller = document.getElementById("main-scroll");
+      if (!scroller) return;
+      const el = id ? document.getElementById(id) : null;
+      if (!el) {
+        scroller.scrollTop = 0;
+        return;
+      }
+      const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      scroller.scrollTop = Math.max(0, top - 8);
+    });
+  }
+
+  function coramWeekBody() {
     const start = coramWeekStart();
     const end = addDays(start, 6);
     const week = coramWeekKey();
@@ -1127,11 +1302,6 @@
     const weekLabel = state.coramOffset === 0 ? `이번 주 · ${formatRange(start, end)}` : formatRange(start, end);
     const nextMuted = state.coramOffset >= 0;
     return `
-      <header class="px-5 pt-6">
-        <p class="text-[13px] font-medium text-terra">사랑동산</p>
-        <h1 class="mt-3 text-[24px] font-semibold">나의 코람데오</h1>
-        <p class="mt-2 text-[13px] text-muted">한 주간 하나님 앞에 나아간 기록</p>
-      </header>
       <div class="mt-6 space-y-3 px-5 pb-6">
         <div class="flex items-center justify-between rounded-[24px] border border-stone-200/80 bg-ivory px-2 py-2">
           <button type="button" data-action="coram-week" data-step="-1" class="flex h-10 w-10 items-center justify-center rounded-full text-[20px] leading-none text-ink" aria-label="이전 주">‹</button>
@@ -1152,8 +1322,109 @@
           title: "QT",
           body: coramDayButtons("qt", record.qtDays, start),
         })}
+        <button type="button" data-action="coram-pane" data-pane="term" class="flex w-full items-center justify-between rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4 text-left">
+          <span>
+            <span class="block text-[16px] font-semibold">이번 텀 한 눈에 보기</span>
+            <span class="mt-1 block text-[13px] text-muted">9월 13일–3월 13일</span>
+          </span>
+          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+        </button>
         ${coramStatus()}
       </div>`;
+  }
+
+  function coramTermBody() {
+    const map = coramDayMap();
+    const today = seoulToday();
+    const month = coramActiveMonth();
+    const prevMuted = !coramMonthInTerm(shiftMonth(month, -1));
+    const nextMuted = !coramMonthInTerm(shiftMonth(month, 1));
+    const stats = coramMonthStats(map, month);
+    const focus = parseIsoDate(state.coramFocus);
+    const focusEntry = focus ? map[isoDate(focus)] : null;
+    const cells = coramMonthCells(month)
+      .map((date) => {
+        if (!date) return `<span></span>`;
+        const key = isoDate(date);
+        const level = coramLevel(map[key], date);
+        const closed = !coramInTerm(date) || ymd(date) > ymd(today);
+        const selected = state.coramFocus === key;
+        const klass = `${coramFillClass(level, date)} ${selected ? "outline outline-2 outline-ink" : ""}`;
+        const label = `${date.m}월 ${date.d}일 ${WEEKDAYS[weekdayIndex(date)]}`;
+        if (closed) {
+          return `<span class="flex aspect-square items-center justify-center rounded-xl text-[12px] font-semibold ${klass}">${date.d}</span>`;
+        }
+        return `<button type="button" data-action="coram-focus" data-date="${key}" aria-label="${label}" aria-pressed="${selected ? "true" : "false"}" class="flex aspect-square items-center justify-center rounded-xl text-[12px] font-semibold ${klass}">${date.d}</button>`;
+      })
+      .join("");
+    const termMonths = coramTermMonths()
+      .map((item) => {
+        const mini = coramMonthCells(item)
+          .map((date) => {
+            if (!date) return `<span class="aspect-square"></span>`;
+            const level = coramLevel(map[isoDate(date)], date);
+            return `<span class="aspect-square rounded-[2px] ${coramFillClass(level, date)}"></span>`;
+          })
+          .join("");
+        const viewing = sameMonth(item, month);
+        const shell = `flex w-full flex-col items-stretch rounded-2xl px-1.5 py-1.5 text-left ${viewing ? "bg-ivory ring-1 ring-terra" : ""}`;
+        return `<button type="button" data-action="coram-pick-month" data-year="${item.y}" data-month="${item.m}" aria-label="${item.y}년 ${item.m}월" class="${shell}"><span class="mb-1 block w-full text-center"><span class="block text-[10px] leading-3 text-muted">${String(item.y).slice(2)}년</span><span class="block text-[11px] font-medium leading-4 text-ink">${item.m}월</span></span><span class="grid w-full grid-cols-7 gap-px">${mini}</span></button>`;
+      })
+      .join("");
+    const detail = focus
+      ? `<div class="mt-3 rounded-2xl bg-cream px-3 py-3">
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-[14px] font-medium">${focus.m}월 ${focus.d}일 ${WEEKDAYS[weekdayIndex(focus)]}</p>
+            <button type="button" data-action="coram-jump-week" data-date="${isoDate(focus)}" class="inline-flex shrink-0 items-center gap-0.5 text-[13px] font-semibold text-terra">이 주 기록 수정하기<svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+          </div>
+          ${coramDayDetail(focusEntry, focus)}
+        </div>`
+      : "";
+    const arrow = (step, muted, label) =>
+      `<button type="button" data-action="coram-month" data-step="${step}" class="flex h-10 w-10 items-center justify-center rounded-full text-[20px] leading-none ${muted ? "text-stone-300" : "text-ink"}" ${muted ? "disabled" : ""} aria-label="${label}">${step < 0 ? "‹" : "›"}</button>`;
+    return `
+      <div class="mt-6 space-y-3 px-5 pb-8">
+        <section id="coram-month" class="rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4">
+          <div class="flex items-center justify-between">
+            ${arrow(-1, prevMuted, "이전 달")}
+            <p class="text-[15px] font-semibold">${month.y}년 ${month.m}월</p>
+            ${arrow(1, nextMuted, "다음 달")}
+          </div>
+          <p class="mt-1 text-center text-[13px] text-muted">기도 <span class="font-semibold text-ink">${stats.pray}</span> · 통독 <span class="font-semibold text-ink">${stats.read}</span> · QT <span class="font-semibold text-ink">${stats.qt}</span></p>
+          <div class="mt-3 grid grid-cols-7 gap-1 text-center text-[11px] text-muted">${CORAM_DAYS.map((label) => `<span>${label}</span>`).join("")}</div>
+          <div class="mt-1 grid grid-cols-7 gap-1">${cells}</div>
+          ${detail}
+          <div class="mt-3 flex items-center justify-center gap-3 text-[11px] text-muted">
+            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-[3px] bg-[#E4DCD0]"></span>없음</span>
+            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-[3px] bg-[#E8C7C0]"></span>일부</span>
+            <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-[3px] bg-terra"></span>모두</span>
+          </div>
+        </section>
+        <section class="px-1 pt-2">
+          <h2 class="text-[16px] font-semibold">이번 텀</h2>
+          <p class="mt-1 text-[13px] text-muted">달력을 누르면 해당 월이 위에서 보여집니다</p>
+          <div class="mt-3 grid grid-cols-3 items-start gap-2">${termMonths}</div>
+        </section>
+      </div>`;
+  }
+
+  function coramView() {
+    if (state.coramPane === "term") {
+      return `
+        <header class="px-5 pt-6">
+          <button type="button" data-action="coram-pane" data-pane="week" class="text-[14px] font-medium text-terra">‹ 이번 주</button>
+          <h1 class="mt-3 text-[24px] font-semibold">이번 텀 나의 코람데오</h1>
+          <p class="mt-2 text-[13px] text-muted">9월 13일부터 3월 13일까지</p>
+        </header>
+        ${coramTermBody()}`;
+    }
+    return `
+      <header class="px-5 pt-6">
+        <p class="text-[13px] font-medium text-terra">사랑동산</p>
+        <h1 class="mt-3 text-[24px] font-semibold">나의 코람데오</h1>
+        <p class="mt-2 text-[13px] text-muted">한 주간 하나님 앞에 나아간 기록</p>
+      </header>
+      ${coramWeekBody()}`;
   }
 
   function tabbar() {
@@ -1817,6 +2088,50 @@
       if (!draft) return;
       scheduleCoramSave();
       renderKeepingScroll();
+      return;
+    }
+    if (action === "coram-pane") {
+      state.coramPane = el.getAttribute("data-pane") === "term" ? "term" : "week";
+      render();
+      scrollCoramTo();
+      return;
+    }
+    if (action === "coram-month") {
+      const step = Number(el.getAttribute("data-step"));
+      const next = shiftMonth(coramActiveMonth(), step < 0 ? -1 : 1);
+      if (!coramMonthInTerm(next)) return;
+      state.coramLook = next;
+      const focus = parseIsoDate(state.coramFocus);
+      if (!focus || !sameMonth(focus, next)) state.coramFocus = "";
+      render();
+      return;
+    }
+    if (action === "coram-pick-month") {
+      const next = { y: Number(el.getAttribute("data-year")), m: Number(el.getAttribute("data-month")) };
+      if (!next.y || !next.m || !coramMonthInTerm(next)) return;
+      state.coramLook = next;
+      const focus = parseIsoDate(state.coramFocus);
+      if (!focus || !sameMonth(focus, next)) state.coramFocus = "";
+      render();
+      scrollCoramTo("coram-month");
+      return;
+    }
+    if (action === "coram-focus") {
+      const date = el.getAttribute("data-date");
+      state.coramFocus = state.coramFocus === date ? "" : date;
+      renderKeepingScroll();
+      return;
+    }
+    if (action === "coram-jump-week") {
+      const date = parseIsoDate(el.getAttribute("data-date"));
+      if (!date) return;
+      const offset = coramOffsetForDate(date);
+      if (offset > 0) return;
+      cancelCoramGoalEdit();
+      state.coramOffset = offset;
+      state.coramPane = "week";
+      render();
+      scrollCoramTo();
     }
   }
 
