@@ -869,20 +869,29 @@
       </div>`;
   }
 
-  function eventRow(event, { compact = false, today = null } = {}) {
-    const isToday = today && ymd(event.date) === ymd(today);
-    return `
-      <div class="flex gap-3 ${isToday ? "items-center rounded-2xl bg-terra/10 px-2 pt-2 pb-3 -mx-2" : "items-start py-2"}">
-        <div class="w-10 shrink-0 pt-0.5 text-center">
-          <div class="relative text-[15px] font-semibold leading-none ${isToday ? "text-terra" : "text-ink"}">
-            ${event.date.d}
-          </div>
-          <div class="mt-1 text-[11px] leading-none text-muted">${esc(event.weekday)}</div>
-        </div>
-        <div class="min-w-0 flex-1">
-          ${eventBody(event, { compact, showToday: isToday })}
-        </div>
-      </div>`;
+  function homeDays(events, today) {
+    const days = [];
+    for (const event of events) {
+      const last = days[days.length - 1];
+      if (last && ymd(last[0].date) === ymd(event.date)) last.push(event);
+      else days.push([event]);
+    }
+    return days
+      .map((day) => {
+        const event = day[0];
+        const isToday = today && ymd(event.date) === ymd(today);
+        return `
+          <div class="flex items-start gap-3 ${isToday ? "rounded-2xl bg-terra/10 px-2 pt-2 pb-3 -mx-2" : "py-2"}">
+            <div class="w-10 shrink-0 pt-0.5 text-center">
+              <div class="text-[15px] font-semibold leading-none ${isToday ? "text-terra" : "text-ink"}">${event.date.d}</div>
+              <div class="mt-1 text-[11px] leading-none text-muted">${esc(event.weekday)}</div>
+            </div>
+            <div class="min-w-0 flex-1 space-y-3">
+              ${day.map((item, index) => eventBody(item, { compact: true, showToday: isToday && index === 0 })).join("")}
+            </div>
+          </div>`;
+      })
+      .join("");
   }
 
   function scheduleDay(events, today) {
@@ -1473,7 +1482,7 @@
         <div class="mt-3 divide-y divide-stone-100">
           ${
             events.length
-              ? events.map((event) => eventRow(event, { compact: true, today })).join("")
+              ? homeDays(events, today)
               : `<p class="py-4 text-[14px] text-muted">이번 주 등록된 일정이 없습니다</p>`
           }
         </div>
