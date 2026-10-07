@@ -5,7 +5,6 @@
     members: "1332261210",
     places: "447610135",
     links: "782002476",
-    login: "1674760346",
   };
   const TABS = ["home", "schedule", "members", "coram", "links"];
   const CORAM_SCRIPT_URL =
@@ -52,7 +51,6 @@
     links: [],
     roster: [],
     rosterReady: false,
-    password: "",
     scheduleVersion: "",
     coramRows: [],
     coramReady: false,
@@ -66,6 +64,7 @@
     coramLook: null,
     coramFocus: "",
     sessionName: null,
+    sessionToken: "",
     tab: "home",
     scheduleFilter: "전체",
     memberQuery: "",
@@ -73,6 +72,10 @@
     namePickerOpen: false,
     loginName: "",
     loginPassword: "",
+    loginConfirm: "",
+    loginGroup: "",
+    loginMode: "enter",
+    loginBusy: false,
     loginError: "",
     toast: "",
     refreshing: false,
@@ -554,7 +557,7 @@
     }, 400);
   }
 
-  function postCoram(record) {
+  function postScript(body) {
     return new Promise((resolve, reject) => {
       if (!CORAM_SCRIPT_URL) {
         reject(new Error("unconfigured"));
@@ -563,37 +566,46 @@
       const cb = `coram_cb_${Date.now()}_${Math.floor(Math.random() * 1e5)}`;
       const script = document.createElement("script");
       const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error("timeout"));
+        finish(() => reject(new Error("timeout")));
       }, 15000);
       function cleanup() {
         clearTimeout(timer);
         delete window[cb];
         script.remove();
       }
-      window[cb] = (payload) => {
+      let settled = false;
+      function finish(fn) {
+        if (settled) return;
+        settled = true;
         cleanup();
-        if (payload?.ok) resolve(payload);
-        else reject(new Error(payload?.error || "save"));
+        fn();
+      }
+      window[cb] = (payload) => {
+        finish(() => {
+          if (payload?.ok) resolve(payload);
+          else reject(new Error(payload?.error || "save"));
+        });
       };
-      const payload = encodeURIComponent(
-        JSON.stringify({
-          password: state.password,
-          name: record.name,
-          week: record.week,
-          readGoal: record.readGoal,
-          readDays: record.readDays,
-          prayGoal: record.prayGoal,
-          prayDays: record.prayDays,
-          qtDays: record.qtDays,
-        })
-      );
+      const payload = encodeURIComponent(JSON.stringify(body));
       script.src = `${CORAM_SCRIPT_URL}?callback=${cb}&payload=${payload}&t=${Date.now()}`;
       script.onerror = () => {
-        cleanup();
-        reject(new Error("network"));
+        setTimeout(() => finish(() => reject(new Error("network"))), 800);
       };
       document.body.appendChild(script);
+    });
+  }
+
+  function postCoram(record) {
+    return postScript({
+      action: "save",
+      token: state.sessionToken,
+      name: record.name,
+      week: record.week,
+      readGoal: record.readGoal,
+      readDays: record.readDays,
+      prayGoal: record.prayGoal,
+      prayDays: record.prayDays,
+      qtDays: record.qtDays,
     });
   }
 
@@ -635,29 +647,24 @@
       .filter(Boolean);
   }
 
-  function parsePassword(table) {
-    for (const row of table.rows || []) {
-      const key = String(cell(row, 0).v || "").trim();
-      const value = String(cell(row, 1).v || "").trim();
-      if (key === "App_Password") return value;
-    }
-    const first = table.rows?.[0];
-    return first ? String(cell(first, 1).v || "").trim() : "";
-  }
-
   function readSession() {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      return typeof parsed?.name === "string" ? parsed.name : null;
+      const exp = Number(parsed?.exp);
+      if (typeof parsed?.name === "string" && typeof parsed?.token === "string" && exp > Date.now()) {
+        return { name: parsed.name, token: parsed.token, exp };
+      }
     } catch {
-      return null;
+      /* 예전 로그인 기억은 아래에서 지웁니다. */
     }
+    clearSession();
+    return null;
   }
 
-  function writeSession(name) {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ name }));
+  function writeSession(name, token, exp) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ name, token, exp }));
   }
 
   function clearSession() {
@@ -684,13 +691,12 @@
         "",
         `&sheet=${encodeURIComponent("코람데오")}&headers=1`
       ).catch(() => null);
-      const [membersTable, eventsTable, placesTable, linksTable, loginTable, versionTable, rosterTable, coramTable] =
+      const [membersTable, eventsTable, placesTable, linksTable, versionTable, rosterTable, coramTable] =
         await Promise.all([
           loadGviz(GIDS.members),
           loadGviz(GIDS.schedule),
           loadGviz(GIDS.places),
           loadGviz(GIDS.links),
-          loadGviz(GIDS.login),
           versionPromise,
           rosterPromise,
           coramPromise,
@@ -704,11 +710,10 @@
       state.coramRows = parseCoram(coramTable);
       state.coramReady = Boolean(coramTable);
       if (state.coramSave !== "saving" && state.coramSave !== "error") state.coramDrafts = {};
-      state.password = parsePassword(loginTable);
       state.scheduleVersion = parseScheduleVersion(versionTable);
       const saved = readSession();
-      state.sessionName =
-        saved && state.members.some((m) => m.name === saved) ? saved : null;
+      state.sessionName = saved && state.members.some((m) => m.name === saved.name) ? saved.name : null;
+      state.sessionToken = state.sessionName ? saved.token : "";
       if (state.sessionName) {
         const tab = location.hash.replace("#", "");
         if (TABS.includes(tab)) state.tab = tab;
@@ -935,6 +940,8 @@
 
   function loginView() {
     const selected = state.members.find((m) => m.name === state.loginName);
+    const setup = state.loginMode === "setup";
+    const busy = state.loginBusy;
     return `
       <div class="flex min-h-dvh flex-col px-5 pb-10 pt-16">
         <p class="text-[13px] font-medium tracking-wide text-terra">사랑동산</p>
@@ -946,14 +953,30 @@
           <span class="text-muted">▾</span>
         </button>
 
-        <label class="mt-5 text-[13px] font-medium text-muted" for="login-password">비밀번호</label>
-        <input id="login-password" data-field="password" type="password" autocomplete="current-password"
+        <label class="mt-5 text-[13px] font-medium text-muted" for="login-password">${setup ? "새 비밀번호" : "비밀번호"}</label>
+        <input id="login-password" data-field="password" type="password" autocomplete="${setup ? "new-password" : "current-password"}"
           class="mt-2 h-[52px] w-full rounded-2xl border border-stone-200 bg-ivory px-4 text-[16px] outline-none focus:border-terra"
           value="${esc(state.loginPassword)}" />
 
+        ${
+          setup
+            ? `<p class="mt-4 text-[13px] leading-relaxed text-muted">이 이름은 아직 비밀번호가 없어요. 새로 정한 비밀번호를 한 번 더 적고, 지금까지 함께 쓰던 비밀번호로 확인해 주세요.</p>
+        <label class="mt-4 text-[13px] font-medium text-muted" for="login-confirm">비밀번호 확인</label>
+        <input id="login-confirm" data-field="confirm" type="password" autocomplete="new-password"
+          class="mt-2 h-[52px] w-full rounded-2xl border border-stone-200 bg-ivory px-4 text-[16px] outline-none focus:border-terra"
+          value="${esc(state.loginConfirm)}" />
+        <label class="mt-5 text-[13px] font-medium text-muted" for="login-group">함께 쓰던 비밀번호</label>
+        <input id="login-group" data-field="group" type="password" autocomplete="current-password"
+          class="mt-2 h-[52px] w-full rounded-2xl border border-stone-200 bg-ivory px-4 text-[16px] outline-none focus:border-terra"
+          value="${esc(state.loginGroup)}" />`
+            : ""
+        }
+
         ${state.loginError ? `<p class="mt-3 text-[13px] text-terra">${esc(state.loginError)}</p>` : ""}
 
-        <button data-action="login" class="mt-8 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory">사랑하기</button>
+        <button data-action="${setup ? "setup-password" : "login"}" ${busy ? "disabled" : ""}
+          class="mt-8 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory disabled:opacity-60">${busy ? "확인하는 중" : setup ? "비밀번호 정하기" : "사랑하기"}</button>
+        ${setup ? `<button data-action="login-back" class="mt-3 h-[44px] w-full text-[13px] text-muted">이미 비밀번호가 있어요</button>` : ""}
       </div>
       ${state.namePickerOpen ? namePicker() : ""}`;
   }
@@ -1946,13 +1969,110 @@
       el.addEventListener("input", () => {
         const field = el.getAttribute("data-field");
         if (field === "password") state.loginPassword = el.value;
+        if (field === "confirm") state.loginConfirm = el.value;
+        if (field === "group") state.loginGroup = el.value;
       });
-      if (el.getAttribute("data-field") === "password") {
+      if (el.getAttribute("data-field") === "password" || el.getAttribute("data-field") === "confirm" || el.getAttribute("data-field") === "group") {
         el.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") handleAction("login");
+          if (event.key === "Enter") handleAction(state.loginMode === "setup" ? "setup-password" : "login");
         });
       }
     });
+  }
+
+  function loginErrorMessage(code) {
+    if (code === "auth") return "이름 또는 비밀번호가 올바르지 않습니다";
+    if (code === "group") return "함께 쓰던 비밀번호가 올바르지 않습니다";
+    if (code === "taken") return "이미 비밀번호가 있어요. 그 비밀번호로 들어가 주세요.";
+    if (code === "short") return "비밀번호는 네 글자 이상으로 정해 주세요";
+    if (code === "timeout" || code === "network") return "연결하지 못했어요. 잠시 후 다시 시도해 주세요";
+    return "잠시 후 다시 시도해 주세요";
+  }
+
+  function acceptSession(name, result) {
+    state.sessionName = name;
+    state.sessionToken = result.token;
+    state.loginError = "";
+    state.loginPassword = "";
+    state.loginConfirm = "";
+    state.loginGroup = "";
+    state.loginMode = "enter";
+    state.loginBusy = false;
+    writeSession(name, result.token, result.exp);
+    state.tab = "home";
+    location.hash = "home";
+  }
+
+  async function submitPersonalLogin() {
+    if (state.loginBusy) return;
+    const nameOk = state.members.some((m) => m.name === state.loginName);
+    if (!nameOk || !state.loginPassword) {
+      state.loginError = "이름과 비밀번호를 입력해 주세요";
+      render();
+      return;
+    }
+    state.loginBusy = true;
+    state.loginError = "";
+    render();
+    try {
+      const result = await postScript({
+        action: "login",
+        name: state.loginName,
+        password: state.loginPassword,
+      });
+      acceptSession(state.loginName, result);
+    } catch (err) {
+      state.loginBusy = false;
+      if (err?.message === "setup") {
+        state.loginMode = "setup";
+        state.loginError = "";
+      } else {
+        state.loginError = loginErrorMessage(err?.message);
+      }
+    }
+    render();
+  }
+
+  async function submitPersonalSetup() {
+    if (state.loginBusy) return;
+    const nameOk = state.members.some((m) => m.name === state.loginName);
+    if (!nameOk || !state.loginPassword) {
+      state.loginError = "이름과 비밀번호를 입력해 주세요";
+      render();
+      return;
+    }
+    if (state.loginPassword.length < 4) {
+      state.loginError = "비밀번호는 네 글자 이상으로 정해 주세요";
+      render();
+      return;
+    }
+    if (state.loginPassword !== state.loginConfirm) {
+      state.loginError = "비밀번호가 서로 다릅니다";
+      render();
+      return;
+    }
+    if (!state.loginGroup) {
+      state.loginError = "함께 쓰던 비밀번호를 입력해 주세요";
+      render();
+      return;
+    }
+    state.loginBusy = true;
+    state.loginError = "";
+    render();
+    try {
+      const result = await postScript({
+        action: "setup",
+        name: state.loginName,
+        password: state.loginPassword,
+        groupPassword: state.loginGroup,
+      });
+      acceptSession(state.loginName, result);
+    } catch (err) {
+      state.loginBusy = false;
+      if (err?.message === "taken") state.loginMode = "enter";
+      state.loginError = loginErrorMessage(err?.message);
+    }
+    render();
   }
 
   function handleAction(action, el) {
@@ -1976,31 +2096,36 @@
       state.loginName = el.getAttribute("data-name");
       state.namePickerOpen = false;
       state.memberQuery = "";
+      state.loginError = "";
       render();
       return;
     }
     if (action === "login") {
-      const nameOk = state.members.some((m) => m.name === state.loginName);
-      const passOk = state.loginPassword === state.password;
-      if (!nameOk || !passOk) {
-        state.loginError = "이름 또는 비밀번호가 올바르지 않습니다";
-        render();
-        return;
-      }
-      state.sessionName = state.loginName;
+      submitPersonalLogin();
+      return;
+    }
+    if (action === "setup-password") {
+      submitPersonalSetup();
+      return;
+    }
+    if (action === "login-back") {
+      state.loginMode = "enter";
+      state.loginConfirm = "";
+      state.loginGroup = "";
       state.loginError = "";
-      state.loginPassword = "";
-      writeSession(state.sessionName);
-      state.tab = "home";
-      location.hash = "home";
       render();
       return;
     }
     if (action === "logout") {
       clearSession();
       state.sessionName = null;
+      state.sessionToken = "";
       state.loginName = "";
       state.loginPassword = "";
+      state.loginConfirm = "";
+      state.loginGroup = "";
+      state.loginMode = "enter";
+      state.loginError = "";
       state.tab = "home";
       location.hash = "";
       render();
