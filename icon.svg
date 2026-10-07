@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#C45C4A"/>
+  <g transform="translate(256 196) scale(12.4) translate(-12 -12.6)">
+    <path fill="#FBF7F2" d="M12 20.5s-7.2-4.6-9.4-8.4C.8 9.2 2 5.8 5.4 5c2-.5 3.8.3 6.6 3.2C14.8 5.3 16.6 4.5 18.6 5c3.4.8 4.6 4.2 2.8 7.1-2.2 3.8-9.4 8.4-9.4 8.4z"/>
+  </g>
+  <text x="256" y="392" text-anchor="middle" font-family="Pretendard, Apple SD Gothic Neo, sans-serif" font-size="52" font-weight="600" fill="#FFFFFF">사랑동산</text>
+</svg>
