@@ -5,7 +5,6 @@
     members: "1332261210",
     places: "447610135",
     links: "782002476",
-    login: "1674760346",
   };
   const TABS = ["home", "schedule", "members", "coram", "links"];
   const CORAM_SCRIPT_URL =
@@ -52,7 +51,6 @@
     links: [],
     roster: [],
     rosterReady: false,
-    password: "",
     scheduleVersion: "",
     coramRows: [],
     coramReady: false,
@@ -66,6 +64,7 @@
     coramLook: null,
     coramFocus: "",
     sessionName: null,
+    sessionToken: "",
     tab: "home",
     scheduleFilter: "전체",
     memberQuery: "",
@@ -73,7 +72,16 @@
     namePickerOpen: false,
     loginName: "",
     loginPassword: "",
+    loginConfirm: "",
+    loginGroup: "",
+    loginMode: "enter",
+    loginBusy: false,
     loginError: "",
+    diaryStatus: "idle",
+    diaryError: "",
+    diaryEntries: [],
+    diaryId: "",
+    diaryFocus: "",
     toast: "",
     refreshing: false,
   };
@@ -595,7 +603,7 @@
   function postCoram(record) {
     return postScript({
       action: "save",
-      password: state.password,
+      token: state.sessionToken,
       name: record.name,
       week: record.week,
       readGoal: record.readGoal,
@@ -644,29 +652,24 @@
       .filter(Boolean);
   }
 
-  function parsePassword(table) {
-    for (const row of table.rows || []) {
-      const key = String(cell(row, 0).v || "").trim();
-      const value = String(cell(row, 1).v || "").trim();
-      if (key === "App_Password") return value;
-    }
-    const first = table.rows?.[0];
-    return first ? String(cell(first, 1).v || "").trim() : "";
-  }
-
   function readSession() {
     try {
       const raw = localStorage.getItem(SESSION_KEY);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      return typeof parsed?.name === "string" ? parsed.name : null;
+      const exp = Number(parsed?.exp);
+      if (typeof parsed?.name === "string" && typeof parsed?.token === "string" && exp > Date.now()) {
+        return { name: parsed.name, token: parsed.token, exp };
+      }
     } catch {
-      return null;
+      /* 예전 로그인 기억은 아래에서 지웁니다. */
     }
+    clearSession();
+    return null;
   }
 
-  function writeSession(name) {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ name }));
+  function writeSession(name, token, exp) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ name, token, exp }));
   }
 
   function clearSession() {
@@ -693,13 +696,12 @@
         "",
         `&sheet=${encodeURIComponent("코람데오")}&headers=1`
       ).catch(() => null);
-      const [membersTable, eventsTable, placesTable, linksTable, loginTable, versionTable, rosterTable, coramTable] =
+      const [membersTable, eventsTable, placesTable, linksTable, versionTable, rosterTable, coramTable] =
         await Promise.all([
           loadGviz(GIDS.members),
           loadGviz(GIDS.schedule),
           loadGviz(GIDS.places),
           loadGviz(GIDS.links),
-          loadGviz(GIDS.login),
           versionPromise,
           rosterPromise,
           coramPromise,
@@ -713,13 +715,13 @@
       state.coramRows = parseCoram(coramTable);
       state.coramReady = Boolean(coramTable);
       if (state.coramSave !== "saving" && state.coramSave !== "error") state.coramDrafts = {};
-      state.password = parsePassword(loginTable);
       state.scheduleVersion = parseScheduleVersion(versionTable);
       const saved = readSession();
-      state.sessionName = saved && state.members.some((m) => m.name === saved) ? saved : null;
+      state.sessionName = saved && state.members.some((m) => m.name === saved.name) ? saved.name : null;
+      state.sessionToken = state.sessionName ? saved.token : "";
       if (state.sessionName) {
         const tab = location.hash.replace("#", "");
-        if (TABS.includes(tab)) state.tab = tab;
+        if (TABS.includes(tab) || tab === "diary") state.tab = tab;
       }
       state.status = "ready";
       state.error = "";
@@ -734,6 +736,7 @@
     }
     state.refreshing = false;
     render();
+    if (state.status === "ready" && state.tab === "diary") state.diaryStatus = "ready";
   }
 
   function currentMember() {
@@ -943,6 +946,8 @@
 
   function loginView() {
     const selected = state.members.find((m) => m.name === state.loginName);
+    const setup = state.loginMode === "setup";
+    const busy = state.loginBusy;
     return `
       <div class="flex min-h-dvh flex-col px-5 pb-10 pt-16">
         <p class="text-[13px] font-medium tracking-wide text-terra">사랑동산</p>
@@ -954,14 +959,35 @@
           <span class="text-muted">▾</span>
         </button>
 
-        <label class="mt-5 text-[13px] font-medium text-muted" for="login-password">비밀번호</label>
-        <input id="login-password" data-field="password" type="password" autocomplete="current-password"
+        ${
+          setup
+            ? `<p class="mt-5 text-center text-[13px] leading-relaxed text-muted">개인 비밀번호를 설정해주세요. 비밀번호는 관리자도 볼 수 없어요.</p>`
+            : ""
+        }
+
+        <label class="mt-5 text-[13px] font-medium text-muted" for="login-password">${setup ? "새 비밀번호" : "비밀번호"}</label>
+        <input id="login-password" data-field="password" type="password" autocomplete="${setup ? "new-password" : "current-password"}"
           class="mt-2 h-[52px] w-full rounded-2xl border border-stone-200 bg-ivory px-4 text-[16px] outline-none focus:border-terra"
           value="${esc(state.loginPassword)}" />
 
+        ${
+          setup
+            ? `<label class="mt-5 text-[13px] font-medium text-muted" for="login-confirm">비밀번호 확인</label>
+        <input id="login-confirm" data-field="confirm" type="password" autocomplete="new-password"
+          class="mt-2 h-[52px] w-full rounded-2xl border border-stone-200 bg-ivory px-4 text-[16px] outline-none focus:border-terra"
+          value="${esc(state.loginConfirm)}" />`
+            : ""
+        }
+
         ${state.loginError ? `<p class="mt-3 text-[13px] text-terra">${esc(state.loginError)}</p>` : ""}
 
-        <button data-action="login" class="mt-8 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory">사랑하기</button>
+        <button data-action="${setup ? "setup-password" : "login"}" ${busy ? "disabled" : ""}
+          class="mt-8 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory disabled:opacity-60">${busy ? "확인하는 중" : setup ? "비밀번호 정하기" : "사랑하기"}</button>
+        ${
+          setup
+            ? `<button data-action="login-back" class="mt-4 h-[44px] w-full bg-transparent text-[14px] font-medium text-muted">로그인 화면으로</button>`
+            : ""
+        }
       </div>
       ${state.namePickerOpen ? namePicker() : ""}`;
   }
@@ -1028,7 +1054,7 @@
   }
 
   const LINK_STYLE = {
-    form: "bg-terra/10 text-terra",
+    form: "bg-[#EDE7F6] text-[#673AB7]",
     notion: "bg-stone-200/80 text-ink",
     chat: "bg-gold/25 text-[#7A6230]",
     sheet: "bg-sage/15 text-sage",
@@ -1040,7 +1066,7 @@
   function linkGlyph(kind) {
     const wrap = (body) =>
       `<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
-    if (kind === "form") return wrap(`<path d="M8 3.5h6l4 4V20a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z"/><path d="M14 3.5V8h4M9 13h6M9 17h4"/>`);
+    if (kind === "form") return wrap(`<rect x="5" y="4" width="14" height="16" rx="2"/><circle cx="8.6" cy="8" r="1.45" fill="currentColor" stroke="none"/><path d="M11.6 8H16"/><circle cx="8.6" cy="12" r="1.45" fill="currentColor" stroke="none"/><path d="M11.6 12H16"/><circle cx="8.6" cy="16" r="1.45" fill="currentColor" stroke="none"/><path d="M11.6 16H14.5"/>`);
     if (kind === "notion") return wrap(`<rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>`);
     if (kind === "chat") return wrap(`<path d="M6.5 16.2 4.5 20l4-1.4A8 8 0 1 0 6.5 16.2z"/>`);
     if (kind === "sheet") return wrap(`<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M4 14h16M10 9v11"/>`);
@@ -1051,15 +1077,333 @@
 
   function linkCard(link) {
     const style = LINK_STYLE[link.kind] || LINK_STYLE.link;
-    return `
-      <a href="${esc(diaryHref(link))}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-3.5 active:bg-cream">
+    const inner = `
         <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${style}">${linkGlyph(link.kind)}</span>
         <span class="min-w-0 flex-1">
           <span class="block truncate text-[16px] font-medium">${esc(link.label)}</span>
           <span class="mt-0.5 block text-[12px] text-muted">${esc(link.hint)}</span>
         </span>
-        <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+        <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>`;
+    if (link.label !== "양육일기") {
+      return `
+      <a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-3.5 active:bg-cream">
+        ${inner}
       </a>`;
+    }
+    return `
+      <div class="overflow-hidden rounded-[24px] border border-stone-200/80 bg-ivory">
+        <a href="${esc(diaryHref(link))}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 px-4 py-3.5 active:bg-cream">
+          ${inner}
+        </a>
+        ${diaryEntryButton()}
+      </div>`;
+  }
+
+  function diaryPerson(name, tag, note, visit) {
+    return { name, tag, note, visit: visit || "" };
+  }
+
+  function diaryMockCatalog() {
+    const page = (id, week, submitted, summary, body) => ({ id, week, submitted, summary, ...body });
+    return [
+      page("2026-10-05", "2026-10-05", "10/6에 적음", "김하늘, 이도윤과 함께 · 박서연은 결석", {
+        present: [
+          diaryPerson("김하늘", "01/여", "예배 자리가 조금씩 편해졌다고 했어요.", "수요일에 짧게 통화"),
+          diaryPerson("이도윤", "02/남", "과제가 몰려 기도가 흐트러진 한 주였어요.", "금요일 저녁에 밥"),
+        ],
+        absent: [diaryPerson("박서연", "01/여", "가족 여행. 돌아오면 다시 만나기로 했어요.")],
+        care: [],
+        count: "6/8",
+        mood: "나눔이 평소보다 길었고, 처음 나온 질문이 좋았던 주였어요.",
+        faith: [
+          ["주일예배", "1부 출석"],
+          ["대청부 집회", "출석"],
+          ["토요비전새벽예배", "두 번"],
+          ["예습", "함"],
+          ["성경 통독", "하루 3장 / 5일"],
+          ["개인 기도", "하루 20분 / 6일"],
+          ["QT", "5일"],
+          ["주중모임", "수요기도회"],
+        ],
+        prayer: "순원들의 이름을 하나씩 불러 보며 기도하고 싶어요.",
+        visit: "",
+      }),
+      page("2026-09-28", "2026-09-28", "9/29에 적음", "김하늘, 박서연과 함께", {
+        present: [
+          diaryPerson("김하늘", "01/여", "이번 주는 이야기보다 곁에 앉아 있는 시간이 많았어요."),
+          diaryPerson("박서연", "01/여", "여행에서 돌아와 모임에 다시 앉았습니다."),
+        ],
+        absent: [],
+        care: [],
+        count: "5/8",
+        mood: "짧은 나눔이었지만, 서로 안부를 빠짐없이 물었어요.",
+        faith: [
+          ["주일예배", "출석"],
+          ["성경 통독", "하루 3장 / 3일"],
+          ["개인 기도", "하루 20분 / 4일"],
+          ["QT", "3일"],
+        ],
+        prayer: "돌아온 한 사람이 다시 자리에 앉은 것이 고마웠습니다.",
+        visit: "",
+      }),
+      page("2026-09-21-b", "2026-09-21", "같은 주, 이어 적음", "이도윤에게 한 줄을 더", {
+        present: [diaryPerson("이도윤", "02/남", "모임 후에 기도제목을 한 줄 더 받았어요. 시험이 끝나는 주까지 기억해 두려고 적습니다.")],
+        absent: [],
+        care: [],
+        count: "",
+        mood: "",
+        faith: [],
+        prayer: "",
+        visit: "",
+      }),
+      page("2026-09-21", "2026-09-21", "9/22에 적음", "조용한 모임 · 박서연을 먼저 찾음", {
+        present: [
+          diaryPerson("김하늘", "01/여", "오늘은 듣기보다 질문을 많이 했어요."),
+          diaryPerson("이도윤", "02/남", "말이 적었지만 끝까지 남아 자리를 정리했습니다."),
+        ],
+        absent: [],
+        care: [diaryPerson("박서연", "01/여", "연락이 뜸해져서, 이번 주는 제가 먼저 안부를 물었어요.")],
+        count: "5/8",
+        mood: "모임은 조용했고, 그래서 한 사람의 이야기를 더 오래 들을 수 있었어요.",
+        faith: [
+          ["주일예배", "2부 출석"],
+          ["대청부 집회", "출석"],
+          ["성경 통독", "하루 3장 / 4일"],
+          ["개인 기도", "하루 15분 / 5일"],
+          ["QT", "4일"],
+        ],
+        prayer: "먼저 연락하는 일을 미루지 않게 해 주세요.",
+        visit: "",
+      }),
+      page("2026-09-14", "2026-09-14", "9/15에 적음", "김하늘, 이도윤, 박서연과 텀을 시작", {
+        present: [
+          diaryPerson("김하늘", "01/여", "이름을 다시 익히며 이번 텀의 기대를 나눴어요."),
+          diaryPerson("이도윤", "02/남", "첫 모임이라 어색해했지만 마지막에는 웃었습니다."),
+          diaryPerson("박서연", "01/여", "자신이 맡은 한 주를 스스로 말해 주었어요."),
+        ],
+        absent: [],
+        care: [],
+        count: "7/8",
+        mood: "텀을 시작하는 주. 서로의 이름을 다시 익혔어요.",
+        faith: [
+          ["주일예배", "출석"],
+          ["예습", "함"],
+          ["성경 통독", "하루 2장 / 4일"],
+          ["개인 기도", "하루 20분 / 4일"],
+          ["QT", "4일"],
+        ],
+        prayer: "이번 텀 동안 이 순을 잘 품고 싶습니다.",
+        visit: "있음 · 개강 후 한 번, 순의 전체를 두고 이야기를 나누고 싶습니다.",
+      }),
+    ];
+  }
+
+  function diaryMockPages() {
+    return diaryMockCatalog().map((page) => {
+      const start = parseIsoDate(page.week);
+      const end = addDays(start, 6);
+      return { ...page, range: formatRange(start, end), start, end };
+    });
+  }
+
+  function diaryGiven(name) {
+    const text = String(name || "");
+    return text.length > 2 ? text.slice(-2) : text;
+  }
+
+  function diaryCast(page) {
+    return [
+      ...(page.present || []).map((person) => ({ ...person, tone: "present", caption: "함께" })),
+      ...(page.absent || []).map((person) => ({ ...person, tone: "absent", caption: "결석" })),
+      ...(page.care || []).map((person) => ({ ...person, tone: "care", caption: "마음" })),
+    ];
+  }
+
+  function diaryView() {
+    if (state.diaryId) return diaryFormDetail();
+    return diaryListScreen();
+  }
+
+  function diaryEntryButton() {
+    return `
+        <button type="button" data-action="open-diary" class="flex w-full items-center justify-between border-t border-stone-200/80 px-4 py-3 text-left active:bg-cream">
+          <span>
+            <span class="block text-[13px] font-medium">지난 양육일기 돌아보기</span>
+            <span class="mt-0.5 block text-[12px] text-muted">${esc(diaryRecordLine())}</span>
+          </span>
+          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+        </button>`;
+  }
+
+  function diaryAttendPill(present) {
+    const tone = present ? "bg-sage text-ivory" : "border border-stone-300 bg-ivory text-stone-500";
+    return `<span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold ${tone}">${present ? "출" : "결"}</span>`;
+  }
+
+  function diaryFormNotes(page) {
+    return diaryCast(page)
+      .map(
+        (person) => `
+        <div class="rounded-2xl bg-cream px-3.5 py-3">
+          <div class="flex items-start justify-between gap-3">
+            <p class="min-w-0 text-[15px] font-medium">${esc(person.name)} <span class="text-[12px] font-normal text-muted">${esc(person.tag)}</span></p>
+            ${diaryAttendPill(person.tone === "present")}
+          </div>
+          <p class="mt-1.5 text-[14px] leading-relaxed">${esc(person.note)}</p>
+          ${person.visit ? `<p class="mt-1.5 text-[12px] text-muted">${esc(person.visit)}</p>` : ""}
+        </div>`
+      )
+      .join("");
+  }
+
+  function diarySlots() {
+    const today = seoulToday();
+    const pages = diaryMockPages();
+    let cursor = weekRange(CORAM_TERM.start).start;
+    const slots = [];
+    while (ymd(cursor) <= ymd(today)) {
+      const sunday = addDays(cursor, 6);
+      if (ymd(sunday) <= ymd(today) && ymd(sunday) >= ymd(CORAM_TERM.start)) {
+        const weekKey = isoDate(cursor);
+        const filled = pages.filter((page) => page.week === weekKey);
+        slots.push({ weekKey, sunday, pages: filled, page: filled.find((page) => page.count) || filled[0] || null });
+      }
+      cursor = addDays(cursor, 7);
+    }
+    slots.forEach((slot, index) => {
+      slot.nth = index + 1;
+      slot.title = `${slot.nth}번째 GBS (${formatMd(slot.sunday)})`;
+      slot.heading = `이번 텀 ${slot.nth}번째 GBS`;
+      slot.dateLabel = formatMd(slot.sunday);
+    });
+    return slots;
+  }
+
+  function diaryRecordCount() {
+    return diarySlots().filter((slot) => slot.page).length;
+  }
+
+  function diaryRecordLine() {
+    return `이번 텀 ${diaryRecordCount()}번의 GBS에 대한 기록`;
+  }
+
+  function diarySlotById(id) {
+    return diarySlots().find((slot) => slot.weekKey === id || slot.pages.some((page) => page.id === id));
+  }
+
+  function diaryRoster() {
+    const seen = [];
+    diaryMockPages()
+      .slice()
+      .reverse()
+      .forEach((page) => {
+        [...(page.present || []), ...(page.absent || []), ...(page.care || [])].forEach((person) => {
+          if (!seen.some((item) => item.name === person.name)) seen.push(person);
+        });
+      });
+    return seen;
+  }
+
+  function diaryAttended(pages) {
+    const names = new Set();
+    pages.forEach((page) => (page.present || []).forEach((person) => names.add(person.name)));
+    return names;
+  }
+
+  function diaryListFaces(pages) {
+    const attended = diaryAttended(pages);
+    return diaryRoster()
+      .map((person) => {
+        const on = attended.has(person.name);
+        const tone = on ? "bg-sage text-ivory" : "border border-stone-300 bg-ivory text-stone-400";
+        return `<span class="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-full px-1.5 text-[11px] font-medium ${tone}">${esc(diaryGiven(person.name))}</span>`;
+      })
+      .join("");
+  }
+
+  function diaryListScreen() {
+    const rows = diarySlots()
+      .slice()
+      .reverse()
+      .map((slot) => {
+        const page = slot.page;
+        const faces = page ? `<span class="mt-3 flex flex-wrap gap-1.5">${diaryListFaces(slot.pages)}</span>` : "";
+        const foot = page?.count
+          ? `<span class="mt-3 flex items-baseline gap-1.5">
+              <span class="text-[12px] text-muted">출석인원</span>
+              <span class="text-[14px] text-ink">${esc(page.count)}</span>
+            </span>`
+          : "";
+        return `
+          <button type="button" data-action="open-diary-entry" data-id="${esc(page ? page.id : slot.weekKey)}" class="flex w-full items-center gap-3 rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4 text-left active:bg-cream">
+            <span class="min-w-0 flex-1">
+              <span class="block text-[16px] font-medium">${esc(slot.title)}</span>
+              ${faces}
+              ${foot}
+            </span>
+            <span class="flex shrink-0 items-center gap-2">
+              <span class="text-[13px] font-medium text-ink">펼쳐보기</span>
+              <span class="flex h-7 w-7 items-center justify-center rounded-full border border-stone-300 text-[16px] leading-none text-ink" aria-hidden="true">+</span>
+            </span>
+          </button>`;
+      })
+      .join("");
+    return `
+      <header class="px-5 pt-6">
+        <button type="button" data-action="close-diary" class="text-[13px] font-medium text-terra">‹ 주요링크</button>
+        <h1 class="mt-3 text-[24px] font-semibold">양육일기 돌아보기</h1>
+        <p class="mt-2 text-[13px] text-muted">${esc(diaryRecordLine())}</p>
+      </header>
+      <div class="mt-6 space-y-2 px-5 pb-10">${rows}</div>`;
+  }
+
+  function diaryFormDetail() {
+    const page = diaryMockPages().find((item) => item.id === state.diaryId);
+    const slot = diarySlotById(state.diaryId);
+    const heading = slot ? slot.heading : "양육일기";
+    const dateLabel = slot ? slot.dateLabel : "";
+    if (!page) {
+      return `
+        <header class="px-5 pt-6">
+          <button type="button" data-action="close-diary-entry" class="text-[13px] font-medium text-terra">‹ 목록</button>
+          <h1 class="mt-3 text-[24px] font-semibold">${esc(heading)}</h1>
+          ${dateLabel ? `<p class="mt-2 text-[13px] text-muted">${esc(dateLabel)}</p>` : ""}
+          <p class="mt-4 text-[13px] text-muted">이 주일에는 적힌 응답이 없어요.</p>
+        </header>`;
+    }
+    const notes = diaryFormNotes(page);
+    const meeting = page.count || page.mood
+      ? `<div>
+          ${page.count ? `<p class="text-[14px]"><span class="text-muted">출석인원</span> <span class="font-medium text-ink">${esc(page.count)}</span></p>` : ""}
+          ${page.mood ? `<p class="${page.count ? "mt-3" : ""} text-[15px] leading-relaxed">${esc(page.mood)}</p>` : ""}
+        </div>`
+      : "";
+    return `
+      <header class="px-5 pt-6">
+        <button type="button" data-action="close-diary-entry" class="text-[13px] font-medium text-terra">‹ 목록</button>
+        <h1 class="mt-3 text-[24px] font-semibold">${esc(heading)}</h1>
+        ${dateLabel ? `<p class="mt-2 text-[13px] text-muted">${esc(dateLabel)}</p>` : ""}
+        ${meeting ? `<div class="mt-5">${meeting}</div>` : ""}
+      </header>
+      <div class="mt-6 space-y-3 px-5 pb-10">
+        ${
+          notes
+            ? `<section class="rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4">
+          <h2 class="text-[16px] font-semibold">순원</h2>
+          <div class="mt-3 space-y-2">${notes}</div>
+        </section>`
+            : ""
+        }
+        ${
+          page.prayer || page.visit
+            ? `<section class="rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4">
+          <h2 class="text-[16px] font-semibold">나의 기도제목</h2>
+          ${page.prayer ? `<p class="mt-3 text-[15px] leading-relaxed">${esc(page.prayer)}</p>` : ""}
+          ${page.visit ? `<p class="mt-3 text-[13px] leading-relaxed text-muted">심방 요청 · ${esc(page.visit)}</p>` : ""}
+        </section>`
+            : ""
+        }
+      </div>`;
   }
 
   function linksView() {
@@ -1716,6 +2060,7 @@
     else if (state.tab === "members") body = membersView();
     else if (state.tab === "coram") body = coramView();
     else if (state.tab === "links") body = linksView();
+    else if (state.tab === "diary") body = diaryView();
     else body = homeView(today, range);
 
     appEl.innerHTML = `
@@ -1954,13 +2299,133 @@
       el.addEventListener("input", () => {
         const field = el.getAttribute("data-field");
         if (field === "password") state.loginPassword = el.value;
+        if (field === "confirm") state.loginConfirm = el.value;
       });
-      if (el.getAttribute("data-field") === "password") {
+      if (el.getAttribute("data-field") === "password" || el.getAttribute("data-field") === "confirm") {
         el.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") handleAction("login");
+          if (event.key === "Enter") handleAction(state.loginMode === "setup" ? "setup-password" : "login");
         });
       }
     });
+  }
+
+  function loginErrorMessage(code) {
+    if (code === "auth") return "이름 또는 비밀번호가 올바르지 않습니다";
+    if (code === "group") return "함께 쓰던 비밀번호가 올바르지 않습니다";
+    if (code === "taken") return "이미 비밀번호가 있어요. 그 비밀번호로 들어가 주세요.";
+    if (code === "short") return "비밀번호는 네 글자 이상으로 정해 주세요";
+    if (code === "timeout" || code === "network") return "연결하지 못했어요. 잠시 후 다시 시도해 주세요";
+    return "잠시 후 다시 시도해 주세요";
+  }
+
+  function acceptSession(name, result) {
+    state.sessionName = name;
+    state.sessionToken = result.token;
+    state.loginError = "";
+    state.loginPassword = "";
+    state.loginConfirm = "";
+    state.loginGroup = "";
+    state.loginMode = "enter";
+    state.loginBusy = false;
+    writeSession(name, result.token, result.exp);
+    state.tab = "home";
+    location.hash = "home";
+  }
+
+  async function submitPersonalLogin() {
+    if (state.loginBusy) return;
+    const nameOk = state.members.some((m) => m.name === state.loginName);
+    if (!nameOk || !state.loginPassword) {
+      state.loginError = "이름과 비밀번호를 입력해 주세요";
+      render();
+      return;
+    }
+    state.loginBusy = true;
+    state.loginError = "";
+    render();
+    try {
+      const result = await postScript({
+        action: "login",
+        name: state.loginName,
+        password: state.loginPassword,
+      });
+      acceptSession(state.loginName, result);
+    } catch (err) {
+      state.loginBusy = false;
+      if (err?.message === "setup") {
+        state.loginGroup = state.loginPassword;
+        state.loginPassword = "";
+        state.loginConfirm = "";
+        state.loginMode = "setup";
+        state.loginError = "";
+      } else {
+        state.loginError = loginErrorMessage(err?.message);
+      }
+    }
+    render();
+  }
+
+  async function submitPersonalSetup() {
+    if (state.loginBusy) return;
+    const nameOk = state.members.some((m) => m.name === state.loginName);
+    if (!nameOk || !state.loginPassword) {
+      state.loginError = "이름과 비밀번호를 입력해 주세요";
+      render();
+      return;
+    }
+    if (state.loginPassword.length < 4) {
+      state.loginError = "비밀번호는 네 글자 이상으로 정해 주세요";
+      render();
+      return;
+    }
+    if (state.loginPassword !== state.loginConfirm) {
+      state.loginError = "비밀번호가 서로 다릅니다";
+      render();
+      return;
+    }
+    if (!state.loginGroup) {
+      state.loginMode = "enter";
+      state.loginPassword = "";
+      state.loginConfirm = "";
+      state.loginError = "처음부터 다시 입력해 주세요";
+      render();
+      return;
+    }
+    state.loginBusy = true;
+    state.loginError = "";
+    render();
+    try {
+      const result = await postScript({
+        action: "setup",
+        name: state.loginName,
+        password: state.loginPassword,
+        groupPassword: state.loginGroup,
+      });
+      acceptSession(state.loginName, result);
+    } catch (err) {
+      state.loginBusy = false;
+      if (err?.message === "taken") state.loginMode = "enter";
+      state.loginError = loginErrorMessage(err?.message);
+    }
+    render();
+  }
+
+  async function loadDiary() {
+    if (!state.sessionToken) return;
+    state.diaryStatus = "loading";
+    state.diaryError = "";
+    render();
+    try {
+      const result = await postScript({ action: "diary", token: state.sessionToken });
+      state.diaryEntries = Array.isArray(result.entries) ? result.entries : [];
+      state.diaryStatus = "ready";
+      state.diaryError = "";
+    } catch (err) {
+      state.diaryEntries = [];
+      state.diaryStatus = "error";
+      state.diaryError = err?.message || "diary";
+    }
+    if (state.tab === "diary") render();
   }
 
   function handleAction(action, el) {
@@ -1989,31 +2454,72 @@
       return;
     }
     if (action === "login") {
-      const nameOk = state.members.some((m) => m.name === state.loginName);
-      const passOk = state.loginPassword === state.password;
-      if (!nameOk || !passOk) {
-        state.loginError = "이름 또는 비밀번호가 올바르지 않습니다";
-        render();
-        return;
-      }
-      state.sessionName = state.loginName;
-      state.loginError = "";
+      submitPersonalLogin();
+      return;
+    }
+    if (action === "setup-password") {
+      submitPersonalSetup();
+      return;
+    }
+    if (action === "login-back") {
+      state.loginMode = "enter";
       state.loginPassword = "";
-      writeSession(state.sessionName);
-      state.tab = "home";
-      location.hash = "home";
+      state.loginConfirm = "";
+      state.loginGroup = "";
+      state.loginError = "";
       render();
       return;
     }
     if (action === "logout") {
       clearSession();
       state.sessionName = null;
+      state.sessionToken = "";
       state.loginName = "";
       state.loginPassword = "";
+      state.loginConfirm = "";
+      state.loginGroup = "";
+      state.loginMode = "enter";
       state.loginError = "";
+      state.diaryStatus = "idle";
+      state.diaryEntries = [];
+      state.diaryId = "";
+      state.diaryFocus = "";
       state.tab = "home";
       location.hash = "";
       render();
+      return;
+    }
+    if (action === "open-diary") {
+      state.tab = "diary";
+      state.diaryId = "";
+      state.diaryFocus = "";
+      location.hash = "diary";
+      render();
+      return;
+    }
+    if (action === "close-diary") {
+      state.tab = "links";
+      state.diaryId = "";
+      state.diaryFocus = "";
+      location.hash = "links";
+      render();
+      return;
+    }
+    if (action === "open-diary-entry") {
+      state.diaryId = el.getAttribute("data-id") || "";
+      state.diaryFocus = "";
+      render();
+      return;
+    }
+    if (action === "close-diary-entry") {
+      state.diaryId = "";
+      state.diaryFocus = "";
+      render();
+      return;
+    }
+    if (action === "focus-diary-person") {
+      state.diaryFocus = el.getAttribute("data-name") || "";
+      renderKeepingScroll();
       return;
     }
     if (action === "tab") {
@@ -2157,9 +2663,10 @@
   window.addEventListener("hashchange", () => {
     if (!state.sessionName) return;
     const tab = location.hash.replace("#", "");
-    if (TABS.includes(tab) && tab !== state.tab) {
+    if ((TABS.includes(tab) || tab === "diary") && tab !== state.tab) {
       if (tab === "schedule") scheduleJumpToToday = true;
       state.tab = tab;
+      state.diaryId = "";
       render();
     }
   });

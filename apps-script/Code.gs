@@ -3,6 +3,8 @@
 var MEMBER_GID = 1332261210;
 var LOGIN_GID = 1674760346;
 var USER_SHEET_ID = "1jsdm-pqahQzvNOcjFgKKuxO92CdKaElOn19N2qmvRJY";
+var DIARY_RESPONSE_ID = "";
+var DIARY_RESPONSE_NAMES = ["26-2 사랑story (현철) (응답)", "26-2 사랑story (응답)"];
 var TOKEN_DAYS = 180;
 var CORAM_NAME = "코람데오";
 var HEADERS = [
@@ -42,6 +44,7 @@ function doGet(e) {
     var action = String((payload && payload.action) || "save");
     if (action === "login") result = loginPersonal(payload);
     else if (action === "setup") result = setupPersonal(payload);
+    else if (action === "diary") result = listDiary(payload);
     else result = saveCoram(payload);
   } catch (err) {
     result = { ok: false, error: "save" };
@@ -134,11 +137,73 @@ function loginPersonal(data) {
   if (!memberExists(ss, name) || !password) return { ok: false, error: "auth" };
   var sheet = ensureUserSheet_();
   var row = findUserRow_(sheet, name);
-  if (row < 0) return { ok: false, error: "setup" };
-  var hash = String(sheet.getRange(row, 2).getValue() || "");
-  var salt = String(sheet.getRange(row, 3).getValue() || "");
-  if (!hash || !salt || hashPassword_(password, salt) !== hash) return { ok: false, error: "auth" };
+  var hash = row > 0 ? String(sheet.getRange(row, 2).getValue() || "") : "";
+  var salt = row > 0 ? String(sheet.getRange(row, 3).getValue() || "") : "";
+  if (!hash || !salt) {
+    if (!passwordMatches(ss, password)) return { ok: false, error: "auth" };
+    return { ok: false, error: "setup" };
+  }
+  if (hashPassword_(password, salt) !== hash) return { ok: false, error: "auth" };
   return issueToken_(name);
+}
+
+function listDiary(data) {
+  var name = tokenSubject(data && data.token);
+  if (!name) return { ok: false, error: "auth" };
+  var ss = diarySpreadsheet_();
+  if (!ss) return { ok: false, error: "unconfigured" };
+  var sheet = ss.getSheets()[0];
+  var values = sheet.getDataRange().getValues();
+  if (!values.length) return { ok: true, entries: [] };
+  var headers = [];
+  for (var c = 0; c < values[0].length; c++) headers.push(String(values[0][c] || "").trim());
+  var nameCol = diaryHeaderIndex_(headers, ["작성자 본인 이름"]);
+  if (nameCol < 0) return { ok: false, error: "diary" };
+  var roleCol = diaryHeaderIndex_(headers, ["작성자 구분"]);
+  var entries = [];
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][nameCol] || "").trim() !== name) continue;
+    var fields = [];
+    for (var i = 0; i < headers.length; i++) {
+      if (!headers[i] || i === nameCol || i === roleCol || i === 0) continue;
+      var text = diaryCellText_(values[r][i]);
+      if (!text) continue;
+      fields.push({ label: headers[i], value: text });
+    }
+    entries.push({
+      id: String(r + 1),
+      when: diaryCellText_(values[r][0]),
+      role: roleCol >= 0 ? diaryCellText_(values[r][roleCol]) : "",
+      fields: fields,
+    });
+  }
+  entries.reverse();
+  return { ok: true, entries: entries };
+}
+
+function diarySpreadsheet_() {
+  if (DIARY_RESPONSE_ID) return SpreadsheetApp.openById(DIARY_RESPONSE_ID);
+  for (var i = 0; i < DIARY_RESPONSE_NAMES.length; i++) {
+    var files = DriveApp.getFilesByName(DIARY_RESPONSE_NAMES[i]);
+    if (files.hasNext()) return SpreadsheetApp.open(files.next());
+  }
+  return null;
+}
+
+function diaryHeaderIndex_(headers, names) {
+  for (var i = 0; i < headers.length; i++) {
+    for (var n = 0; n < names.length; n++) {
+      if (headers[i].indexOf(names[n]) !== -1) return i;
+    }
+  }
+  return -1;
+}
+
+function diaryCellText_(value) {
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, "Asia/Seoul", "yyyy-MM-dd HH:mm");
+  }
+  return String(value == null ? "" : value).trim();
 }
 
 function setupPersonal(data) {
