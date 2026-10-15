@@ -16,7 +16,10 @@
     start: { y: 2026, m: 9, d: 13 },
     end: { y: 2027, m: 3, d: 13 },
   };
+  // 양육일기 설문은 텀 둘째 주부터 받았다.
+  const DIARY_FIRST_SUNDAY = { y: 2026, m: 9, d: 20 };
   const SESSION_KEY = "sarang_lbs_session_v1";
+  const DIARY_TREND_WEEKS = 8;
   const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
   const CAT_STYLE = {
     사랑동산: "text-terra",
@@ -33,13 +36,13 @@
   ];
   const FILTERS = ["전체", "사랑동산", "대청부", "사랑의교회", "휴일"];
 
-  let scheduleStickyObserver = null;
+  let stickyHeadObserver = null;
 
-  function syncScheduleSticky() {
-    const stickyHeader = document.querySelector("#main-scroll header");
+  function syncStickyHead() {
+    const stickyHead = document.querySelector("#main-scroll [data-sticky-head]");
     const scroller = document.getElementById("main-scroll");
-    if (!stickyHeader || !scroller) return;
-    scroller.style.setProperty("--schedule-sticky", `${Math.round(stickyHeader.getBoundingClientRect().height)}px`);
+    if (!stickyHead || !scroller) return;
+    scroller.style.setProperty("--sticky-head", `${Math.round(stickyHead.getBoundingClientRect().height)}px`);
   }
 
   const state = {
@@ -81,7 +84,7 @@
     diaryError: "",
     diaryEntries: [],
     diaryId: "",
-    diaryFocus: "",
+    diaryTrendOpen: false,
     toast: "",
     refreshing: false,
   };
@@ -1164,7 +1167,7 @@
         absent: [],
         care: [diaryPerson("박서연", "01/여", "연락이 뜸해져서, 이번 주는 제가 먼저 안부를 물었어요.")],
         count: "5/8",
-        mood: "모임은 조용했고, 그래서 한 사람의 이야기를 더 오래 들을 수 있었어요.",
+        mood: "모임은 조용했고, 그래서 한 사람의 이야기를 더 오래 들을 수 있었어요. 중간에 도윤이가 요즘 기도가 잘 안 된다고 솔직하게 말해 줘서, 다른 순원들도 하나둘 자기 이야기를 꺼냈습니다. 다음 주에는 나눔 시간을 조금 더 길게 잡아 보려고 해요.",
         faith: [
           ["주일예배", "2부 출석"],
           ["대청부 집회", "출석"],
@@ -1206,19 +1209,6 @@
     });
   }
 
-  function diaryGiven(name) {
-    const text = String(name || "");
-    return text.length > 2 ? text.slice(-2) : text;
-  }
-
-  function diaryCast(page) {
-    return [
-      ...(page.present || []).map((person) => ({ ...person, tone: "present", caption: "함께" })),
-      ...(page.absent || []).map((person) => ({ ...person, tone: "absent", caption: "결석" })),
-      ...(page.care || []).map((person) => ({ ...person, tone: "care", caption: "마음" })),
-    ];
-  }
-
   function diaryView() {
     if (state.diaryId) return diaryFormDetail();
     return diaryListScreen();
@@ -1228,181 +1218,275 @@
     return `
         <button type="button" data-action="open-diary" class="flex w-full items-center justify-between border-t border-stone-200/80 px-4 py-3 text-left active:bg-cream">
           <span>
-            <span class="block text-[13px] font-medium">지난 양육일기 돌아보기</span>
-            <span class="mt-0.5 block text-[12px] text-muted">${esc(diaryRecordLine())}</span>
+            <span class="block text-[13px] font-medium">나의 양육일기 돌아보기</span>
+            <span class="mt-0.5 block text-[12px] text-muted">${esc(diaryLatestLine())}</span>
           </span>
-          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
         </button>`;
   }
 
-  function diaryAttendPill(present) {
-    const tone = present ? "bg-sage text-ivory" : "border border-stone-300 bg-ivory text-stone-500";
-    return `<span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold ${tone}">${present ? "출" : "결"}</span>`;
-  }
-
-  function diaryFormNotes(page) {
-    return diaryCast(page)
-      .map(
-        (person) => `
-        <div class="rounded-2xl bg-cream px-3.5 py-3">
-          <div class="flex items-start justify-between gap-3">
-            <p class="min-w-0 text-[15px] font-medium">${esc(person.name)} <span class="text-[12px] font-normal text-muted">${esc(person.tag)}</span></p>
-            ${diaryAttendPill(person.tone === "present")}
-          </div>
-          <p class="mt-1.5 text-[14px] leading-relaxed">${esc(person.note)}</p>
-          ${person.visit ? `<p class="mt-1.5 text-[12px] text-muted">${esc(person.visit)}</p>` : ""}
-        </div>`
-      )
-      .join("");
+  function diaryTermWeeks() {
+    const weeks = [];
+    let cursor = weekRange(DIARY_FIRST_SUNDAY).start;
+    while (ymd(addDays(cursor, 6)) <= ymd(CORAM_TERM.end)) {
+      weeks.push({ weekKey: isoDate(cursor), sunday: addDays(cursor, 6) });
+      cursor = addDays(cursor, 7);
+    }
+    return weeks;
   }
 
   function diarySlots() {
-    const today = seoulToday();
+    const today = ymd(seoulToday());
     const pages = diaryMockPages();
-    let cursor = weekRange(CORAM_TERM.start).start;
-    const slots = [];
-    while (ymd(cursor) <= ymd(today)) {
-      const sunday = addDays(cursor, 6);
-      if (ymd(sunday) <= ymd(today) && ymd(sunday) >= ymd(CORAM_TERM.start)) {
-        const weekKey = isoDate(cursor);
-        const filled = pages.filter((page) => page.week === weekKey);
-        slots.push({ weekKey, sunday, pages: filled, page: filled.find((page) => page.count) || filled[0] || null });
-      }
-      cursor = addDays(cursor, 7);
-    }
-    slots.forEach((slot, index) => {
-      slot.nth = index + 1;
-      slot.title = `${slot.nth}번째 GBS (${formatMd(slot.sunday)})`;
-      slot.heading = `이번 텀 ${slot.nth}번째 GBS`;
-      slot.dateLabel = formatMd(slot.sunday);
-    });
-    return slots;
+    return diaryTermWeeks()
+      .filter((week) => ymd(week.sunday) <= today)
+      .map((week) => {
+        const filled = pages.filter((page) => page.week === week.weekKey);
+        return {
+          ...week,
+          pages: filled,
+          page: filled.find((page) => page.count) || filled[0] || null,
+          dateLabel: formatMd(week.sunday),
+        };
+      });
   }
 
-  function diaryRecordCount() {
-    return diarySlots().filter((slot) => slot.page).length;
-  }
-
-  function diaryRecordLine() {
-    return `이번 텀 ${diaryRecordCount()}번의 GBS에 대한 기록`;
+  function diaryLatestLine() {
+    const latest = diarySlots()
+      .filter((slot) => slot.page)
+      .pop();
+    return latest ? `최근 기록 · ${latest.dateLabel} GBS` : "아직 적힌 기록이 없어요";
   }
 
   function diarySlotById(id) {
     return diarySlots().find((slot) => slot.weekKey === id || slot.pages.some((page) => page.id === id));
   }
 
-  function diaryRoster() {
-    const seen = [];
-    diaryMockPages()
-      .slice()
-      .reverse()
-      .forEach((page) => {
-        [...(page.present || []), ...(page.absent || []), ...(page.care || [])].forEach((person) => {
-          if (!seen.some((item) => item.name === person.name)) seen.push(person);
-        });
-      });
-    return seen;
+  function diaryCount(text) {
+    const match = String(text || "").match(/(\d+)\s*\/\s*(\d+)/);
+    if (!match) return null;
+    const present = Number(match[1]);
+    const total = Number(match[2]);
+    return total > 0 ? { present, total } : null;
   }
 
-  function diaryAttended(pages) {
-    const names = new Set();
-    pages.forEach((page) => (page.present || []).forEach((person) => names.add(person.name)));
-    return names;
-  }
-
-  function diaryListFaces(pages) {
-    const attended = diaryAttended(pages);
-    return diaryRoster()
-      .map((person) => {
-        const on = attended.has(person.name);
-        const tone = on ? "bg-sage text-ivory" : "border border-stone-300 bg-ivory text-stone-400";
-        return `<span class="inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-full px-1.5 text-[11px] font-medium ${tone}">${esc(diaryGiven(person.name))}</span>`;
+  function diaryTrendChart(slots) {
+    const points = slots.map((slot) => ({ slot, count: diaryCount(slot.page?.count) }));
+    if (!points.some((point) => point.count)) return "";
+    const maxPeople = Math.max(...points.map((point) => point.count?.total || 0), 1);
+    const columnWidth = `${(100 / Math.min(points.length, DIARY_TREND_WEEKS)).toFixed(4)}%`;
+    const height = (value) => `${((value / maxPeople) * 100).toFixed(1)}%`;
+    const columns = points
+      .map((point) => {
+        const bars = point.count
+          ? `<span class="absolute bottom-0 left-1/2 w-[30px] -translate-x-1/2 rounded-[3px] bg-[#E4DDD3]" style="height:${height(point.count.total)}"></span>
+              <span class="absolute bottom-0 left-1/2 flex w-[24px] -translate-x-1/2 items-end justify-center rounded-[3px] bg-sage pb-1 text-[10px] font-semibold text-ivory" style="height:${height(point.count.present)}">${point.count.present}</span>`
+          : "";
+        return `
+          <div class="flex-none" style="width:${columnWidth}">
+            <div class="relative h-[108px]">${bars}</div>
+            <p class="mt-2 text-center text-[10px] ${point.count ? "text-muted" : "text-stone-300"}">${esc(formatMd(point.slot.sunday))}</p>
+          </div>`;
       })
       .join("");
+    return `<div id="diary-trend" class="flex hide-scroll" style="overflow-x:auto" role="img" aria-label="주일별 라인업 대비 출석인원">${columns}</div>`;
+  }
+
+  function diaryLineup(slots) {
+    for (let i = slots.length - 1; i >= 0; i--) {
+      const count = diaryCount(slots[i].page?.count);
+      if (count) return count.total;
+    }
+    return 0;
+  }
+
+  function diaryTrendSheet() {
+    if (state.tab !== "diary" || !state.diaryTrendOpen) return "";
+    const slots = diarySlots();
+    const chart = diaryTrendChart(slots);
+    const lineup = diaryLineup(slots);
+    return `
+      <div id="diary-trend-backdrop" class="absolute inset-0 z-40 bg-ink/30" data-action="close-diary-trend"></div>
+      <div id="diary-trend-sheet" class="absolute inset-x-0 bottom-0 z-50 rounded-t-[28px] bg-ivory px-5 pb-6 pt-1 shadow-sheet sheet-up">
+        <div data-sheet-handle class="-mx-5 flex h-8 items-center justify-center" style="touch-action: none" aria-hidden="true">
+          <span class="h-1 w-10 rounded-full bg-stone-300"></span>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          <p class="text-[18px] font-semibold">출석 추세</p>
+          ${
+            chart
+              ? `<span class="flex items-center gap-3 text-[11px] text-muted">
+            <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 bg-[#E4DDD3]"></span>라인업(${lineup})</span>
+            <span class="flex items-center gap-1"><span class="h-2.5 w-2.5 bg-sage"></span>출석</span>
+          </span>`
+              : ""
+          }
+        </div>
+        <div class="mt-4">${chart || `<p class="text-[13px] text-muted">아직 출석인원이 적힌 응답이 없어요.</p>`}</div>
+      </div>`;
+  }
+
+  function diaryAverage(slots) {
+    const counts = slots.map((slot) => diaryCount(slot.page?.count)).filter(Boolean);
+    if (!counts.length) return "";
+    return String(Number((counts.reduce((sum, count) => sum + count.present, 0) / counts.length).toFixed(1)));
+  }
+
+  function diaryTermStrip(slots) {
+    const today = ymd(seoulToday());
+    const written = new Set(slots.filter((slot) => slot.page).map((slot) => slot.weekKey));
+    const months = [];
+    diaryTermWeeks().forEach((week) => {
+      const passed = ymd(week.sunday) <= today;
+      const tone = written.has(week.weekKey) ? "bg-sage" : passed ? "border border-dashed border-stone-300" : "bg-[#E4DDD3]";
+      let month = months[months.length - 1];
+      if (!month || month.m !== week.sunday.m) {
+        month = { m: week.sunday.m, started: false, cells: [] };
+        months.push(month);
+      }
+      if (passed) month.started = true;
+      month.cells.push(`<span class="h-3.5 flex-1 rounded-[2px] ${tone}"></span>`);
+    });
+    return months
+      .map(
+        (month) => `
+          <div class="min-w-0" style="flex:${month.cells.length}">
+            <div class="flex gap-[3px]">${month.cells.join("")}</div>
+            <p class="mt-1 whitespace-nowrap text-[10px] ${month.started ? "text-muted" : "text-stone-400"}">${month.m}월</p>
+          </div>`
+      )
+      .join("");
+  }
+
+  function diaryListRow(slot) {
+    const page = slot.page;
+    const count = diaryCount(page.count);
+    const mood = page.mood
+      ? `<span class="mt-1 block text-[14px] leading-relaxed text-stone-600" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(page.mood)}</span>`
+      : `<span class="mt-1 block text-[13px] text-muted">분위기 응답이 없어요.</span>`;
+    return `
+      <li>
+        <button type="button" data-action="open-diary-entry" data-id="${esc(page.id)}" class="flex w-full items-start gap-4 py-3.5 text-left active:opacity-60">
+          <span class="min-w-0 flex-1">
+            <span class="block text-[15px] font-semibold leading-6 text-ink">${slot.sunday.d}일</span>
+            ${mood}
+          </span>
+          <span class="flex shrink-0 flex-col items-end">
+            ${count ? `<span class="text-[14px] leading-6 text-muted"><span class="font-semibold text-ink">${count.present}</span>/${count.total}</span>` : ""}
+            <svg viewBox="0 0 24 24" class="-mr-1 mt-1.5 h-4 w-4 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+          </span>
+        </button>
+      </li>`;
   }
 
   function diaryListScreen() {
-    const rows = diarySlots()
+    const slots = diarySlots();
+    const written = slots.filter((slot) => slot.page);
+    const average = diaryAverage(slots);
+    const months = [];
+    written
       .slice()
       .reverse()
-      .map((slot) => {
-        const page = slot.page;
-        const faces = page ? `<span class="mt-3 flex flex-wrap gap-1.5">${diaryListFaces(slot.pages)}</span>` : "";
-        const foot = page?.count
-          ? `<span class="mt-3 flex items-baseline gap-1.5">
-              <span class="text-[12px] text-muted">출석인원</span>
-              <span class="text-[14px] text-ink">${esc(page.count)}</span>
-            </span>`
-          : "";
-        return `
-          <button type="button" data-action="open-diary-entry" data-id="${esc(page ? page.id : slot.weekKey)}" class="flex w-full items-center gap-3 rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4 text-left active:bg-cream">
-            <span class="min-w-0 flex-1">
-              <span class="block text-[16px] font-medium">${esc(slot.title)}</span>
-              ${faces}
-              ${foot}
-            </span>
-            <span class="flex shrink-0 items-center gap-2">
-              <span class="text-[13px] font-medium text-ink">펼쳐보기</span>
-              <span class="flex h-7 w-7 items-center justify-center rounded-full border border-stone-300 text-[16px] leading-none text-ink" aria-hidden="true">+</span>
-            </span>
-          </button>`;
-      })
-      .join("");
+      .forEach((slot) => {
+        let month = months[months.length - 1];
+        if (!month || month.m !== slot.sunday.m) {
+          month = { m: slot.sunday.m, rows: [] };
+          months.push(month);
+        }
+        month.rows.push(diaryListRow(slot));
+      });
+    const list = months.length
+      ? months
+          .map(
+            (month) => `
+          <section>
+            <h2 class="sticky top-[var(--sticky-head,5.5rem)] z-10 bg-cream px-5 pb-2 pt-5 text-[13px] font-semibold text-muted">${month.m}월</h2>
+            <ul class="mx-5 divide-y divide-stone-200 border-y border-stone-200">${month.rows.join("")}</ul>
+          </section>`
+          )
+          .join("")
+      : `<p class="px-5 pt-5 text-[13px] text-muted">아직 적힌 양육일기가 없어요.</p>`;
     return `
       <header class="px-5 pt-6">
-        <button type="button" data-action="close-diary" class="text-[13px] font-medium text-terra">‹ 주요링크</button>
+        <button type="button" data-action="close-diary" class="block text-[13px] font-medium text-terra">‹ 주요링크</button>
         <h1 class="mt-3 text-[24px] font-semibold">양육일기 돌아보기</h1>
-        <p class="mt-2 text-[13px] text-muted">${esc(diaryRecordLine())}</p>
       </header>
-      <div class="mt-6 space-y-2 px-5 pb-10">${rows}</div>`;
+      <div data-sticky-head class="sticky top-0 z-20 mt-4 border-b border-stone-200 bg-cream px-5 pb-2.5 pt-3">
+        <div class="flex items-center justify-between gap-3">
+          <p class="min-w-0 text-[13px] text-muted">양육일기 작성 <span class="font-semibold text-sage">${written.length}주</span>${
+            average
+              ? `<span class="mx-1.5 text-stone-300">|</span>평균 출석 <span class="font-semibold text-ink">${average}명</span> / ${diaryLineup(slots)}명`
+              : ""
+          }</p>
+          <button type="button" data-action="open-diary-trend" class="flex shrink-0 items-center gap-0.5 text-[13px] font-medium text-sage active:opacity-60">
+            출석 추세
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+          </button>
+        </div>
+        <div class="mt-2.5 flex gap-1.5" role="img" aria-label="이번 텀 주일마다 양육일기를 적었는지">${diaryTermStrip(slots)}</div>
+      </div>
+      <div class="pb-8">${list}</div>`;
   }
 
   function diaryFormDetail() {
     const page = diaryMockPages().find((item) => item.id === state.diaryId);
     const slot = diarySlotById(state.diaryId);
-    const heading = slot ? slot.heading : "양육일기";
-    const dateLabel = slot ? slot.dateLabel : "";
+    const heading = slot ? `${slot.dateLabel} GBS` : "양육일기";
     if (!page) {
       return `
         <header class="px-5 pt-6">
-          <button type="button" data-action="close-diary-entry" class="text-[13px] font-medium text-terra">‹ 목록</button>
+          <button type="button" data-action="close-diary-entry" class="block text-[13px] font-medium text-terra">‹ 목록</button>
           <h1 class="mt-3 text-[24px] font-semibold">${esc(heading)}</h1>
-          ${dateLabel ? `<p class="mt-2 text-[13px] text-muted">${esc(dateLabel)}</p>` : ""}
           <p class="mt-4 text-[13px] text-muted">이 주일에는 적힌 응답이 없어요.</p>
         </header>`;
     }
-    const notes = diaryFormNotes(page);
-    const meeting = page.count || page.mood
-      ? `<div>
-          ${page.count ? `<p class="text-[14px]"><span class="text-muted">출석인원</span> <span class="font-medium text-ink">${esc(page.count)}</span></p>` : ""}
-          ${page.mood ? `<p class="${page.count ? "mt-3" : ""} text-[15px] leading-relaxed">${esc(page.mood)}</p>` : ""}
+    return diaryDetailSummary(page, slot);
+  }
+
+  function diaryBack() {
+    return `<button type="button" data-action="close-diary-entry" class="block text-[13px] font-medium text-terra">‹ 목록</button>`;
+  }
+
+  function diaryOneOnOne(person) {
+    return person.visit ? `<p class="mt-1.5 text-[12px] text-muted">원투원 · ${esc(person.visit)}</p>` : "";
+  }
+
+  function diaryDetailSummary(page, slot) {
+    const count = diaryCount(page.count);
+    const group = (title, list) =>
+      list.length
+        ? `<section class="mt-8">
+          <p class="text-[13px] font-medium text-muted">${title} ${list.length}</p>
+          <ul class="mt-2 divide-y divide-stone-200 border-y border-stone-200">
+            ${list
+              .map(
+                (person) => `
+              <li class="py-4">
+                <p class="text-[15px] font-semibold">${esc(person.name)} <span class="text-[12px] font-normal text-muted">${esc(person.tag)}</span></p>
+                <p class="mt-1.5 text-[14px] leading-relaxed">${esc(person.note)}</p>
+                ${diaryOneOnOne(person)}
+              </li>`
+              )
+              .join("")}
+          </ul>
+        </section>`
+        : "";
+    const meter = count
+      ? `<div class="mt-6">
+          <p class="text-[20px] font-semibold leading-snug">${count.total}명 중 <span class="text-sage">${count.present}명</span>이<br />함께했어요</p>
+          <div class="mt-4 h-2.5 w-full rounded-[3px] bg-[#E4DDD3]"><div class="h-full rounded-[3px] bg-sage" style="width:${Math.round((count.present / count.total) * 100)}%"></div></div>
         </div>`
       : "";
     return `
       <header class="px-5 pt-6">
-        <button type="button" data-action="close-diary-entry" class="text-[13px] font-medium text-terra">‹ 목록</button>
-        <h1 class="mt-3 text-[24px] font-semibold">${esc(heading)}</h1>
-        ${dateLabel ? `<p class="mt-2 text-[13px] text-muted">${esc(dateLabel)}</p>` : ""}
-        ${meeting ? `<div class="mt-5">${meeting}</div>` : ""}
+        ${diaryBack()}
+        <h1 class="mt-3 text-[24px] font-semibold">${esc(slot.dateLabel)} GBS</h1>
+        ${meter}
       </header>
-      <div class="mt-6 space-y-3 px-5 pb-10">
-        ${
-          notes
-            ? `<section class="rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4">
-          <h2 class="text-[16px] font-semibold">순원</h2>
-          <div class="mt-3 space-y-2">${notes}</div>
-        </section>`
-            : ""
-        }
-        ${
-          page.prayer || page.visit
-            ? `<section class="rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4">
-          <h2 class="text-[16px] font-semibold">나의 기도제목</h2>
-          ${page.prayer ? `<p class="mt-3 text-[15px] leading-relaxed">${esc(page.prayer)}</p>` : ""}
-          ${page.visit ? `<p class="mt-3 text-[13px] leading-relaxed text-muted">심방 요청 · ${esc(page.visit)}</p>` : ""}
-        </section>`
-            : ""
-        }
+      <div class="mt-8 px-5 pb-10">
+        ${page.mood ? `<p class="text-[13px] font-medium text-muted">분위기</p><p class="mt-2 text-[16px] leading-relaxed">${esc(page.mood)}</p>` : ""}
+        ${group("함께한 순원", page.present || [])}
+        ${group("함께하지 못한 순원", [...(page.absent || []), ...(page.care || [])])}
       </div>`;
   }
 
@@ -1966,7 +2050,7 @@
     const groups = groupedEvents();
     const anchorYmd = scheduleAnchorYmd(groups, today);
     return `
-      <header class="sticky top-0 z-30 bg-cream px-5 pb-3 pt-6">
+      <header data-sticky-head class="sticky top-0 z-30 bg-cream px-5 pb-3 pt-6">
         <p class="text-[13px] font-medium text-terra">사랑동산</p>
         <h1 class="mt-3 text-[24px] font-semibold">이번 텀 일정</h1>
         ${scheduleVersionLabel(state.scheduleVersion) ? `<p class="mt-2 text-[13px] text-muted">${esc(scheduleVersionLabel(state.scheduleVersion))}</p>` : ""}
@@ -1984,7 +2068,7 @@
                 .map(
                   (group) => `
             <div class="mb-5">
-              <h2 class="sticky top-[var(--schedule-sticky,7.5rem)] z-20 -mx-5 bg-cream px-5 py-2 text-[13px] font-semibold text-muted">${esc(group.title)}</h2>
+              <h2 class="sticky top-[var(--sticky-head,7.5rem)] z-20 -mx-5 bg-cream px-5 py-2 text-[13px] font-semibold text-muted">${esc(group.title)}</h2>
               <div class="relative z-0 pl-5">
                 ${scheduleRows(group.events, today, anchorYmd)}
               </div>
@@ -2065,7 +2149,8 @@
 
     appEl.innerHTML = `
       <div class="flex h-full min-h-0 flex-col overflow-hidden bg-cream">
-        <div id="main-scroll" class="min-h-0 flex-1 overflow-y-auto hide-scroll overscroll-y-contain pb-4">
+        <div class="relative min-h-0 flex-1">
+        <div id="main-scroll" class="h-full overflow-y-auto hide-scroll overscroll-y-contain pb-4">
           <div id="pull-indicator" class="flex items-center justify-center overflow-hidden" style="height:0">
             <div id="pull-badge" class="flex h-10 w-10 items-center justify-center rounded-full border border-terra/40 bg-ivory text-terra shadow-sm">
               <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
@@ -2076,6 +2161,8 @@
           </div>
           ${body}
         </div>
+        ${diaryTrendSheet()}
+        </div>
         ${tabbar()}
       </div>
       ${memberSheet()}
@@ -2083,17 +2170,25 @@
     bind();
     bindPullToRefresh();
     bindSheetDrag("member-sheet", "member-sheet-backdrop", "close-member");
-    if (scheduleStickyObserver) {
-      scheduleStickyObserver.disconnect();
-      scheduleStickyObserver = null;
+    bindSheetDrag("diary-trend-sheet", "diary-trend-backdrop", "close-diary-trend", { handleOnly: true });
+    if (stickyHeadObserver) {
+      stickyHeadObserver.disconnect();
+      stickyHeadObserver = null;
     }
-    syncScheduleSticky();
-    const stickyHeader = document.querySelector("#main-scroll header");
-    if (stickyHeader && window.ResizeObserver) {
-      scheduleStickyObserver = new ResizeObserver(() => syncScheduleSticky());
-      scheduleStickyObserver.observe(stickyHeader);
+    syncStickyHead();
+    const stickyHead = document.querySelector("#main-scroll [data-sticky-head]");
+    if (stickyHead && window.ResizeObserver) {
+      stickyHeadObserver = new ResizeObserver(() => syncStickyHead());
+      stickyHeadObserver.observe(stickyHead);
     }
     queueScheduleScroll();
+    const diaryTrend = document.getElementById("diary-trend");
+    if (diaryTrend) {
+      diaryTrend.scrollLeft = diaryTrend.scrollWidth;
+      requestAnimationFrame(() => {
+        diaryTrend.scrollLeft = diaryTrend.scrollWidth;
+      });
+    }
     if (restoreScroll && state.tab === restoreScroll.tab) {
       const scroller = document.getElementById("main-scroll");
       if (scroller) scroller.scrollTop = restoreScroll.top;
@@ -2177,7 +2272,7 @@
     root.querySelectorAll("[data-action]").forEach((el) => {
       el.addEventListener("click", (event) => {
         const action = el.getAttribute("data-action");
-        if (action === "close-name-picker" || action === "close-member") {
+        if (action === "close-name-picker" || action === "close-member" || action === "close-diary-trend") {
           event.stopPropagation();
         }
         handleAction(action, el);
@@ -2483,7 +2578,6 @@
       state.diaryStatus = "idle";
       state.diaryEntries = [];
       state.diaryId = "";
-      state.diaryFocus = "";
       state.tab = "home";
       location.hash = "";
       render();
@@ -2492,7 +2586,7 @@
     if (action === "open-diary") {
       state.tab = "diary";
       state.diaryId = "";
-      state.diaryFocus = "";
+      state.diaryTrendOpen = false;
       location.hash = "diary";
       render();
       return;
@@ -2500,25 +2594,27 @@
     if (action === "close-diary") {
       state.tab = "links";
       state.diaryId = "";
-      state.diaryFocus = "";
       location.hash = "links";
       render();
       return;
     }
     if (action === "open-diary-entry") {
       state.diaryId = el.getAttribute("data-id") || "";
-      state.diaryFocus = "";
       render();
       return;
     }
     if (action === "close-diary-entry") {
       state.diaryId = "";
-      state.diaryFocus = "";
       render();
       return;
     }
-    if (action === "focus-diary-person") {
-      state.diaryFocus = el.getAttribute("data-name") || "";
+    if (action === "open-diary-trend") {
+      state.diaryTrendOpen = true;
+      renderKeepingScroll();
+      return;
+    }
+    if (action === "close-diary-trend") {
+      state.diaryTrendOpen = false;
       renderKeepingScroll();
       return;
     }
@@ -2667,6 +2763,7 @@
       if (tab === "schedule") scheduleJumpToToday = true;
       state.tab = tab;
       state.diaryId = "";
+      state.diaryTrendOpen = false;
       render();
     }
   });
