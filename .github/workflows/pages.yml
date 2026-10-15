@@ -1,0 +1,65 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 운영 브랜치
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: src-main
+
+      - name: 검증 브랜치
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          path: src-staging
+
+      - name: 사이트 모으기
+        run: |
+          mkdir -p publish/staging
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'apps-script/' \
+            --exclude '목업/' \
+            --exclude '*.md' \
+            src-main/ publish/
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'apps-script/' \
+            --exclude '목업/' \
+            --exclude '*.md' \
+            src-staging/ publish/staging/
+          touch publish/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: publish
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
