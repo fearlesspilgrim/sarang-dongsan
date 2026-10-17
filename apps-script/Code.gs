@@ -7,7 +7,6 @@ var TOKEN_DAYS = 180;
 var CORAM_NAME = "코람데오";
 var PRAYER_NAME = "기도제목";
 var PRAYER_HEADERS = ["이름", "기도제목", "수정시각"];
-var PRAYER_MAX = 1000;
 var HEADERS = [
   "이름",
   "주시작",
@@ -91,7 +90,6 @@ function savePrayer(data) {
   var name = String((data && data.name) || "").trim();
   if (!passwordMatches(ss, data && data.password) || !memberExists(ss, name)) return { ok: false, error: "auth" };
   var text = String((data && data.text) != null ? data.text : "").trim();
-  if (text.length > PRAYER_MAX) text = text.substring(0, PRAYER_MAX);
   var now = Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd HH:mm");
   var sheet = ensurePrayerSheet(ss);
   var values = sheet.getDataRange().getValues();
