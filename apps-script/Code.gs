@@ -7,6 +7,8 @@ var DIARY_RESPONSE_ID = "";
 var DIARY_RESPONSE_NAMES = ["26-2 사랑story (현철) (응답)", "26-2 사랑story (응답)"];
 var TOKEN_DAYS = 180;
 var CORAM_NAME = "코람데오";
+var PRAYER_NAME = "기도제목";
+var PRAYER_HEADERS = ["이름", "기도제목", "수정시각"];
 var HEADERS = [
   "이름",
   "주시작",
@@ -45,6 +47,7 @@ function doGet(e) {
     if (action === "login") result = loginPersonal(payload);
     else if (action === "setup") result = setupPersonal(payload);
     else if (action === "diary") result = listDiary(payload);
+    else if (action === "기도제목저장") result = savePrayer(payload);
     else result = saveCoram(payload);
   } catch (err) {
     result = { ok: false, error: "save" };
@@ -83,6 +86,37 @@ function saveCoram(data) {
   if (rowIndex === -1) sheet.appendRow(row);
   else sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
   return { ok: true };
+}
+
+function savePrayer(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var name = String((data && data.name) || "").trim();
+  var tokenName = tokenSubject(data && data.token);
+  if (!tokenName || tokenName !== name || !memberExists(ss, name)) return { ok: false, error: "auth" };
+  var text = String((data && data.text) != null ? data.text : "").trim();
+  var now = Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd HH:mm");
+  var sheet = ensurePrayerSheet(ss);
+  var values = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][0]).trim() === name) {
+      rowIndex = r + 1;
+      break;
+    }
+  }
+  if (rowIndex === -1) sheet.appendRow([name, text, now]);
+  else sheet.getRange(rowIndex, 1, 1, 3).setValues([[name, text, now]]);
+  return { ok: true, updated: now };
+}
+
+function ensurePrayerSheet(ss) {
+  var sheet = ss.getSheetByName(PRAYER_NAME);
+  if (!sheet) sheet = ss.insertSheet(PRAYER_NAME);
+  if (String(sheet.getRange(1, 1).getValue() || "").trim() !== "이름") {
+    sheet.getRange(1, 1, 1, PRAYER_HEADERS.length).setValues([PRAYER_HEADERS]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
 }
 
 function ensureCoramSheet(ss) {
