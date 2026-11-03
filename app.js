@@ -9,7 +9,7 @@
   };
   const TABS = ["home", "schedule", "members", "coram", "links"];
   const CORAM_SCRIPT_URL =
-    "https://script.google.com/macros/s/AKfycbyrIsEa1O3gueu7MOthSELphC86xVwQnZWf3YY8IkZXZPLkqHVu0g4XVXrz7XyaSJQd/exec";
+    "https://script.google.com/macros/s/AKfycbx1yXER7h-t5YcdhZSTC8N7JR2y7EKPivhwISKyjOrgOHOcQbIRL5rAM5uERw47GloA/exec";
   const CORAM_DAYS = ["월", "화", "수", "목", "금", "토", "일"];
   const CORAM_DEFAULT_READ = 3;
   const CORAM_DEFAULT_PRAY = 20;
