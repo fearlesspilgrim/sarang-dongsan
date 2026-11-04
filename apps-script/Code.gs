@@ -3,8 +3,8 @@
 var MEMBER_GID = 1332261210;
 var LOGIN_GID = 1674760346;
 var USER_SHEET_ID = "1jsdm-pqahQzvNOcjFgKKuxO92CdKaElOn19N2qmvRJY";
-var DIARY_RESPONSE_ID = "";
-var DIARY_RESPONSE_NAMES = ["26-2 사랑story (현철) (응답)", "26-2 사랑story (응답)"];
+var DIARY_SHEET_NAME = "양육일기";
+var DIARY_FIELD_NEEDLES = ["출석 순원", "결석 순원", "집중 케어", "참석 인원", "전체인원", "분위기", "은혜", "애로"];
 var TOKEN_DAYS = 180;
 var CORAM_NAME = "코람데오";
 var PRAYER_NAME = "기도제목";
@@ -184,22 +184,25 @@ function loginPersonal(data) {
 function listDiary(data) {
   var name = tokenSubject(data && data.token);
   if (!name) return { ok: false, error: "auth" };
-  var ss = diarySpreadsheet_();
-  if (!ss) return { ok: false, error: "unconfigured" };
-  var sheet = ss.getSheets()[0];
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!memberExists(ss, name)) return { ok: false, error: "auth" };
+  var sheet = ss.getSheetByName(DIARY_SHEET_NAME);
+  if (!sheet) return { ok: false, error: "unconfigured" };
   var values = sheet.getDataRange().getValues();
   if (!values.length) return { ok: true, entries: [] };
+  var headerRow = diaryHeaderRow_(values);
+  if (headerRow < 0) return { ok: false, error: "diary" };
   var headers = [];
-  for (var c = 0; c < values[0].length; c++) headers.push(String(values[0][c] || "").trim());
+  for (var c = 0; c < values[headerRow].length; c++) headers.push(String(values[headerRow][c] || "").trim());
   var nameCol = diaryHeaderIndex_(headers, ["작성자 본인 이름"]);
-  if (nameCol < 0) return { ok: false, error: "diary" };
   var roleCol = diaryHeaderIndex_(headers, ["작성자 구분"]);
   var entries = [];
-  for (var r = 1; r < values.length; r++) {
+  for (var r = headerRow + 1; r < values.length; r++) {
     if (String(values[r][nameCol] || "").trim() !== name) continue;
     var fields = [];
     for (var i = 0; i < headers.length; i++) {
       if (!headers[i] || i === nameCol || i === roleCol || i === 0) continue;
+      if (!diaryFieldAllowed_(headers[i])) continue;
       var text = diaryCellText_(values[r][i]);
       if (!text) continue;
       fields.push({ label: headers[i], value: text });
@@ -207,7 +210,6 @@ function listDiary(data) {
     entries.push({
       id: String(r + 1),
       when: diaryCellText_(values[r][0]),
-      role: roleCol >= 0 ? diaryCellText_(values[r][roleCol]) : "",
       fields: fields,
     });
   }
@@ -215,13 +217,23 @@ function listDiary(data) {
   return { ok: true, entries: entries };
 }
 
-function diarySpreadsheet_() {
-  if (DIARY_RESPONSE_ID) return SpreadsheetApp.openById(DIARY_RESPONSE_ID);
-  for (var i = 0; i < DIARY_RESPONSE_NAMES.length; i++) {
-    var files = DriveApp.getFilesByName(DIARY_RESPONSE_NAMES[i]);
-    if (files.hasNext()) return SpreadsheetApp.open(files.next());
+function checkDiarySheet() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DIARY_SHEET_NAME);
+  if (!sheet) throw new Error("unconfigured");
+}
+
+function diaryHeaderRow_(values) {
+  var max = values.length < 10 ? values.length : 10;
+  for (var r = 0; r < max; r++) {
+    var headers = [];
+    for (var c = 0; c < values[r].length; c++) headers.push(String(values[r][c] || "").trim());
+    if (diaryHeaderIndex_(headers, ["작성자 본인 이름"]) >= 0) return r;
   }
-  return null;
+  return -1;
+}
+
+function diaryFieldAllowed_(header) {
+  return diaryHeaderIndex_([header], DIARY_FIELD_NEEDLES) >= 0;
 }
 
 function diaryHeaderIndex_(headers, names) {
@@ -301,7 +313,8 @@ function authSecret_() {
 
 function issueToken_(name) {
   var exp = Date.now() + TOKEN_DAYS * 24 * 60 * 60 * 1000;
-  var body = Utilities.base64EncodeWebSafe(JSON.stringify({ name: name, exp: exp }));
+  var json = JSON.stringify({ name: String(name), exp: exp });
+  var body = Utilities.base64EncodeWebSafe(json, Utilities.Charset.UTF_8);
   var sig = Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(body, authSecret_()));
   return { ok: true, token: body + "." + sig, exp: exp };
 }
@@ -315,7 +328,8 @@ function tokenSubject(token) {
   for (var i = 0; i < expected.length; i++) mismatch |= expected.charCodeAt(i) ^ parts[1].charCodeAt(i);
   if (mismatch) return "";
   try {
-    var data = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString());
+    var json = Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString("UTF-8");
+    var data = JSON.parse(json);
     if (!data || !data.name || Number(data.exp) < Date.now()) return "";
     return String(data.name);
   } catch (err) {

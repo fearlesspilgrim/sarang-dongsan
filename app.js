@@ -8,7 +8,7 @@
   };
   const TABS = ["home", "schedule", "members", "coram", "links"];
   const CORAM_SCRIPT_URL =
-    "https://script.google.com/macros/s/AKfycbyrIsEa1O3gueu7MOthSELphC86xVwQnZWf3YY8IkZXZPLkqHVu0g4XVXrz7XyaSJQd/exec";
+    "https://script.google.com/macros/s/AKfycbx1yXER7h-t5YcdhZSTC8N7JR2y7EKPivhwISKyjOrgOHOcQbIRL5rAM5uERw47GloA/exec";
   const CORAM_DAYS = ["월", "화", "수", "목", "금", "토", "일"];
   const CORAM_DEFAULT_READ = 3;
   const CORAM_DEFAULT_PRAY = 20;
@@ -845,7 +845,7 @@
     }
     state.refreshing = false;
     render();
-    if (state.status === "ready" && state.tab === "diary") state.diaryStatus = "ready";
+    loadDiaryIfOpen({ refresh: true });
   }
 
   function currentMember() {
@@ -1234,107 +1234,70 @@
     return { name, tag, note, visit: visit || "" };
   }
 
-  function diaryMockCatalog() {
-    const page = (id, week, submitted, summary, body) => ({ id, week, submitted, summary, ...body });
-    return [
-      page("2026-10-05", "2026-10-05", "10/6에 적음", "김하늘, 이도윤과 함께 · 박서연은 결석", {
-        present: [
-          diaryPerson("김하늘", "01/여", "예배 자리가 조금씩 편해졌다고 했어요.", "수요일에 짧게 통화"),
-          diaryPerson("이도윤", "02/남", "과제가 몰려 기도가 흐트러진 한 주였어요.", "금요일 저녁에 밥"),
-        ],
-        absent: [diaryPerson("박서연", "01/여", "가족 여행. 돌아오면 다시 만나기로 했어요.")],
-        care: [],
-        count: "6/8",
-        mood: "나눔이 평소보다 길었고, 처음 나온 질문이 좋았던 주였어요.",
-        faith: [
-          ["주일예배", "1부 출석"],
-          ["대청부 집회", "출석"],
-          ["토요비전새벽예배", "두 번"],
-          ["예습", "함"],
-          ["성경 통독", "하루 3장 / 5일"],
-          ["개인 기도", "하루 20분 / 6일"],
-          ["QT", "5일"],
-          ["주중모임", "수요기도회"],
-        ],
-        prayer: "순원들의 이름을 하나씩 불러 보며 기도하고 싶어요.",
-        visit: "",
-      }),
-      page("2026-09-28", "2026-09-28", "9/29에 적음", "김하늘, 박서연과 함께", {
-        present: [
-          diaryPerson("김하늘", "01/여", "이번 주는 이야기보다 곁에 앉아 있는 시간이 많았어요."),
-          diaryPerson("박서연", "01/여", "여행에서 돌아와 모임에 다시 앉았습니다."),
-        ],
-        absent: [],
-        care: [],
-        count: "5/8",
-        mood: "짧은 나눔이었지만, 서로 안부를 빠짐없이 물었어요.",
-        faith: [
-          ["주일예배", "출석"],
-          ["성경 통독", "하루 3장 / 3일"],
-          ["개인 기도", "하루 20분 / 4일"],
-          ["QT", "3일"],
-        ],
-        prayer: "돌아온 한 사람이 다시 자리에 앉은 것이 고마웠습니다.",
-        visit: "",
-      }),
-      page("2026-09-21-b", "2026-09-21", "같은 주, 이어 적음", "이도윤에게 한 줄을 더", {
-        present: [diaryPerson("이도윤", "02/남", "모임 후에 기도제목을 한 줄 더 받았어요. 시험이 끝나는 주까지 기억해 두려고 적습니다.")],
-        absent: [],
-        care: [],
-        count: "",
-        mood: "",
-        faith: [],
-        prayer: "",
-        visit: "",
-      }),
-      page("2026-09-21", "2026-09-21", "9/22에 적음", "조용한 모임 · 박서연을 먼저 찾음", {
-        present: [
-          diaryPerson("김하늘", "01/여", "오늘은 듣기보다 질문을 많이 했어요."),
-          diaryPerson("이도윤", "02/남", "말이 적었지만 끝까지 남아 자리를 정리했습니다."),
-        ],
-        absent: [],
-        care: [diaryPerson("박서연", "01/여", "연락이 뜸해져서, 이번 주는 제가 먼저 안부를 물었어요.")],
-        count: "5/8",
-        mood: "모임은 조용했고, 그래서 한 사람의 이야기를 더 오래 들을 수 있었어요. 중간에 도윤이가 요즘 기도가 잘 안 된다고 솔직하게 말해 줘서, 다른 순원들도 하나둘 자기 이야기를 꺼냈습니다. 다음 주에는 나눔 시간을 조금 더 길게 잡아 보려고 해요.",
-        faith: [
-          ["주일예배", "2부 출석"],
-          ["대청부 집회", "출석"],
-          ["성경 통독", "하루 3장 / 4일"],
-          ["개인 기도", "하루 15분 / 5일"],
-          ["QT", "4일"],
-        ],
-        prayer: "먼저 연락하는 일을 미루지 않게 해 주세요.",
-        visit: "",
-      }),
-      page("2026-09-14", "2026-09-14", "9/15에 적음", "김하늘, 이도윤, 박서연과 텀을 시작", {
-        present: [
-          diaryPerson("김하늘", "01/여", "이름을 다시 익히며 이번 텀의 기대를 나눴어요."),
-          diaryPerson("이도윤", "02/남", "첫 모임이라 어색해했지만 마지막에는 웃었습니다."),
-          diaryPerson("박서연", "01/여", "자신이 맡은 한 주를 스스로 말해 주었어요."),
-        ],
-        absent: [],
-        care: [],
-        count: "7/8",
-        mood: "텀을 시작하는 주. 서로의 이름을 다시 익혔어요.",
-        faith: [
-          ["주일예배", "출석"],
-          ["예습", "함"],
-          ["성경 통독", "하루 2장 / 4일"],
-          ["개인 기도", "하루 20분 / 4일"],
-          ["QT", "4일"],
-        ],
-        prayer: "이번 텀 동안 이 순을 잘 품고 싶습니다.",
-        visit: "있음 · 개강 후 한 번, 순의 전체를 두고 이야기를 나누고 싶습니다.",
-      }),
-    ];
+  function diaryField(fields, needles, skip = []) {
+    for (const item of fields || []) {
+      const label = String(item.label || "");
+      if (skip.some((part) => label.includes(part))) continue;
+      if (!needles.some((part) => label.includes(part))) continue;
+      const value = String(item.value || "").trim();
+      if (value) return value;
+    }
+    return "";
   }
 
-  function diaryMockPages() {
-    return diaryMockCatalog().map((page) => {
-      const start = parseIsoDate(page.week);
-      const end = addDays(start, 6);
-      return { ...page, range: formatRange(start, end), start, end };
-    });
+  function diaryWhenDate(when) {
+    const stamped = String(when || "").match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+    if (!stamped) return null;
+    return { y: Number(stamped[1]), m: Number(stamped[2]), d: Number(stamped[3]) };
+  }
+
+  function diaryParsePerson(line) {
+    const rest = String(line || "")
+      .trim()
+      .replace(/^\(\d+\)\s*/, "")
+      .replace(/^\d+[.)]\s*/, "");
+    const match = rest.match(/^(.+?)(?:\(([^)]*)\))?\s*(?:\/\s*(.*))?$/);
+    if (!match) return null;
+    const name = match[1].trim();
+    if (!name) return null;
+    const tag = String(match[2] || "").trim();
+    const tail = String(match[3] || "").trim();
+    const parts = tail ? tail.split(/\s*\/\s*/) : [""];
+    return diaryPerson(name, tag, String(parts[0] || "").trim(), parts.slice(1).join(" / ").trim());
+  }
+
+  function diaryParsePeople(text) {
+    return String(text || "")
+      .split(/\n+/)
+      .map((line) => diaryParsePerson(line))
+      .filter(Boolean);
+  }
+
+  function diaryPageFromEntry(entry) {
+    const whenDate = diaryWhenDate(entry?.when);
+    if (!whenDate) return null;
+    const start = weekRange(whenDate).start;
+    const end = addDays(start, 6);
+    const fields = entry.fields || [];
+    return {
+      id: String(entry.id || isoDate(start)),
+      week: isoDate(start),
+      submitted: `${whenDate.m}/${whenDate.d}에 적음`,
+      present: diaryParsePeople(diaryField(fields, ["출석 순원"], ["결석"])),
+      absent: diaryParsePeople(diaryField(fields, ["결석 순원"])),
+      care: diaryParsePeople(diaryField(fields, ["집중 케어"])),
+      count: diaryField(fields, ["참석 인원", "전체인원"]),
+      mood: diaryField(fields, ["분위기", "은혜", "애로"]),
+      prayer: diaryField(fields, ["본인 기도제목"]),
+      visit: diaryField(fields, ["심방"]),
+      range: formatRange(start, end),
+      start,
+      end,
+    };
+  }
+
+  function diaryPages() {
+    return (state.diaryEntries || []).map(diaryPageFromEntry).filter(Boolean);
   }
 
   function diaryView() {
@@ -1365,7 +1328,7 @@
 
   function diarySlots() {
     const today = ymd(seoulToday());
-    const pages = diaryMockPages();
+    const pages = diaryPages();
     return diaryTermWeeks()
       .filter((week) => ymd(week.sunday) <= today)
       .map((week) => {
@@ -1508,6 +1471,22 @@
   }
 
   function diaryListScreen() {
+    if (state.diaryStatus === "loading" && !state.diaryEntries.length) {
+      return `
+        <header class="px-5 pt-6">
+          <button type="button" data-action="close-diary" class="block text-[13px] font-medium text-terra">‹ 주요링크</button>
+          <h1 class="mt-3 text-[24px] font-semibold">양육일기 돌아보기</h1>
+        </header>
+        <p class="px-5 pt-8 text-[14px] text-muted">기록을 불러오고 있어요</p>`;
+    }
+    if (state.diaryStatus === "error") {
+      return `
+        <header class="px-5 pt-6">
+          <button type="button" data-action="close-diary" class="block text-[13px] font-medium text-terra">‹ 주요링크</button>
+          <h1 class="mt-3 text-[24px] font-semibold">양육일기 돌아보기</h1>
+        </header>
+        <p class="px-5 pt-8 text-[14px] text-muted">기록을 불러오지 못했어요</p>`;
+    }
     const slots = diarySlots();
     const written = slots.filter((slot) => slot.page);
     const average = diaryAverage(slots);
@@ -1557,7 +1536,7 @@
   }
 
   function diaryFormDetail() {
-    const page = diaryMockPages().find((item) => item.id === state.diaryId);
+    const page = diaryPages().find((item) => item.id === state.diaryId);
     const slot = diarySlotById(state.diaryId);
     const heading = slot ? `${slot.dateLabel} GBS` : "양육일기";
     if (!page) {
@@ -2810,11 +2789,18 @@
     render();
   }
 
+  function loadDiaryIfOpen({ refresh = false } = {}) {
+    if (!state.sessionToken || state.tab !== "diary") return;
+    if (state.diaryStatus === "loading") return;
+    if (!refresh && state.diaryStatus === "ready") return;
+    loadDiary();
+  }
+
   async function loadDiary() {
     if (!state.sessionToken) return;
     state.diaryStatus = "loading";
     state.diaryError = "";
-    render();
+    if (state.tab === "diary") render();
     try {
       const result = await postScript({ action: "diary", token: state.sessionToken });
       state.diaryEntries = Array.isArray(result.entries) ? result.entries : [];
@@ -2825,7 +2811,7 @@
       state.diaryStatus = "error";
       state.diaryError = err?.message || "diary";
     }
-    if (state.tab === "diary") render();
+    if (state.tab === "diary" || state.tab === "links") render();
   }
 
   function handleAction(action, el) {
@@ -2894,6 +2880,7 @@
       state.diaryTrendOpen = false;
       location.hash = "diary";
       render();
+      loadDiaryIfOpen();
       return;
     }
     if (action === "close-diary") {
@@ -3108,6 +3095,7 @@
       state.diaryId = "";
       state.diaryTrendOpen = false;
       render();
+      loadDiaryIfOpen();
     }
   });
 

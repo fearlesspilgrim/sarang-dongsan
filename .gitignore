@@ -2,3 +2,9 @@
 .cursor
 *.log
 목업/
+node_modules/
+.tools/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
