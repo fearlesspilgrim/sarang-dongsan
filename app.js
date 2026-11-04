@@ -8,7 +8,7 @@
   };
   const TABS = ["home", "schedule", "members", "coram", "links"];
   const CORAM_SCRIPT_URL =
-    "https://script.google.com/macros/s/AKfycbyrIsEa1O3gueu7MOthSELphC86xVwQnZWf3YY8IkZXZPLkqHVu0g4XVXrz7XyaSJQd/exec";
+    "https://script.google.com/macros/s/AKfycbx1yXER7h-t5YcdhZSTC8N7JR2y7EKPivhwISKyjOrgOHOcQbIRL5rAM5uERw47GloA/exec";
   const CORAM_DAYS = ["월", "화", "수", "목", "금", "토", "일"];
   const CORAM_DEFAULT_READ = 3;
   const CORAM_DEFAULT_PRAY = 20;
@@ -42,7 +42,9 @@
     const stickyHead = document.querySelector("#main-scroll [data-sticky-head]");
     const scroller = document.getElementById("main-scroll");
     if (!stickyHead || !scroller) return;
-    scroller.style.setProperty("--sticky-head", `${Math.round(stickyHead.getBoundingClientRect().height)}px`);
+    const height = Math.round(stickyHead.getBoundingClientRect().height);
+    scroller.style.setProperty("--sticky-head", `${height}px`);
+    scroller.style.setProperty("--schedule-sticky", `${Math.max(0, height - 1)}px`);
   }
 
   const state = {
@@ -72,6 +74,18 @@
     scheduleFilter: "전체",
     memberQuery: "",
     selectedMember: null,
+    memberSheetPaged: false,
+    prayers: {},
+    prayerReady: false,
+    prayerDraft: "",
+    prayerEditOpen: false,
+    prayerEditing: false,
+    prayerSaving: false,
+    prayerClearAsk: false,
+    prayerCompose: "",
+    prayerHistoryOpen: false,
+    prayerHistoryJump: "",
+    prayerError: "",
     namePickerOpen: false,
     loginName: "",
     loginPassword: "",
@@ -508,6 +522,97 @@
       .filter(Boolean);
   }
 
+  function parsePrayers(table) {
+    const grouped = {};
+    if (!table) return {};
+    (table.rows || []).forEach((row, order) => {
+      const name = String(cell(row, 0).v || "").trim();
+      if (!name || name === "이름") return;
+      const stamp = cell(row, 2);
+      const entry = {
+        text: String(cell(row, 1).v || "").trim(),
+        updated: prayerUpdatedLabel(stamp),
+        time: prayerTime(stamp, order),
+      };
+      if (!grouped[name]) grouped[name] = [];
+      grouped[name].push(entry);
+    });
+    const map = {};
+    Object.keys(grouped).forEach((name) => {
+      const list = grouped[name].slice().sort((a, b) => a.time - b.time);
+      const latest = list[list.length - 1];
+      map[name] = {
+        text: latest.text,
+        updated: latest.updated,
+        time: latest.time,
+        history: list.slice(0, -1).filter((item) => item.text).reverse(),
+      };
+    });
+    return map;
+  }
+
+  function prayerMissPreview() {
+    return /^(127\.0\.0\.1|localhost)$/.test(location.hostname) && /[?&]prayer-miss(?:&|=|$)/.test(location.search);
+  }
+
+  function prayerOf(name) {
+    return state.prayers[name] || { text: "", updated: "", history: [] };
+  }
+
+  function prayerTime(item, order) {
+    const text = String(item?.f || item?.v || "").trim();
+    const stamped = text.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/);
+    if (stamped) {
+      const time = new Date(
+        Number(stamped[1]),
+        Number(stamped[2]) - 1,
+        Number(stamped[3]),
+        Number(stamped[4] || 0),
+        Number(stamped[5] || 0)
+      ).getTime();
+      if (!Number.isNaN(time)) return time + order / 1000;
+    }
+    const date = parseGvizDate(item?.v, item?.f);
+    if (date?.y) return new Date(date.y, date.m - 1, date.d).getTime() + order / 1000;
+    return order;
+  }
+
+  function prayerUpdatedLabel(item) {
+    const text = String(item?.f || item?.v || "").trim();
+    const stamped = text.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+    if (stamped) return `${Number(stamped[2])}월 ${Number(stamped[3])}일`;
+    const date = parseGvizDate(item?.v, item?.f);
+    return date?.m ? `${date.m}월 ${date.d}일` : "";
+  }
+
+  function memberIndexOf(name) {
+    return state.members.findIndex((item) => item.name === name);
+  }
+
+  function neighborMember(step) {
+    const list = state.members;
+    if (list.length < 2 || !state.selectedMember) return null;
+    const index = memberIndexOf(state.selectedMember.name);
+    if (index < 0) return null;
+    return list[(index + step + list.length) % list.length];
+  }
+
+  function selectMember(name, { paged = false, keepScroll = false } = {}) {
+    state.selectedMember = state.members.find((item) => item.name === name) || null;
+    state.prayerEditOpen = false;
+    state.prayerEditing = false;
+    state.prayerCompose = "";
+    state.prayerHistoryOpen = false;
+    state.prayerClearAsk = false;
+    state.prayerError = "";
+    state.memberSheetPaged = paged;
+    if (state.selectedMember?.name === state.sessionName) {
+      state.prayerDraft = prayerOf(state.sessionName).text;
+    }
+    if (keepScroll) renderKeepingScroll();
+    else render();
+  }
+
   function latestCoramGoals() {
     const byWeek = {};
     for (const row of state.coramRows) {
@@ -617,6 +722,91 @@
     });
   }
 
+  function postPrayer(text, mode) {
+    return postScript({
+      action: "기도제목저장",
+      token: state.sessionToken,
+      name: state.sessionName,
+      text,
+      mode,
+    });
+  }
+
+  function rememberPrayer(name, text, stamp, mode) {
+    const current = prayerOf(name);
+    const label = prayerUpdatedLabel({ v: stamp, f: stamp });
+    const next = {
+      text,
+      updated: label,
+      time: Date.now(),
+      history: current.history || [],
+    };
+    if (mode === "new" && current.text) {
+      next.history = [{ text: current.text, updated: current.updated, time: current.time || 0 }, ...next.history];
+    }
+    state.prayers = { ...state.prayers, [name]: next };
+  }
+
+  async function savePrayer() {
+    const area = document.getElementById("prayer-draft");
+    const next = String(area ? area.value : state.prayerDraft).trim();
+    if (!state.sessionName) return;
+    if (!state.prayerReady) {
+      state.prayerSaving = false;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerError = "기도제목을 불러오지 못했어요. 지기에게 문의해주세요.";
+      renderKeepingScroll();
+      return;
+    }
+    const mode = state.prayerCompose === "new" ? "new" : "update";
+    const had = prayerOf(state.sessionName).text.trim();
+    if (mode === "new" && !next) {
+      state.prayerDraft = next;
+      state.prayerError = "내용을 적어 주세요";
+      renderKeepingScroll();
+      return;
+    }
+    if (mode === "update" && !next && had && !state.prayerClearAsk) {
+      state.prayerDraft = next;
+      state.prayerClearAsk = true;
+      renderKeepingScroll();
+      return;
+    }
+    state.prayerClearAsk = false;
+    state.prayerDraft = next;
+    state.prayerSaving = true;
+    state.prayerError = "";
+    renderKeepingScroll();
+    try {
+      const result = await postPrayer(next, mode);
+      if (result?.unchanged) {
+        state.prayerSaving = false;
+        state.prayerError = "지금 기도제목과 같아요";
+        renderKeepingScroll();
+        return;
+      }
+      const stamp = String(result?.updated || "");
+      rememberPrayer(state.sessionName, next, stamp, mode);
+      state.prayerSaving = false;
+      state.prayerEditOpen = false;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = false;
+      state.selectedMember = null;
+      showToast(next ? (mode === "new" ? "새 기도제목을 남겼어요" : "기도제목을 고쳤어요") : "기도제목을 지웠어요");
+    } catch (err) {
+      state.prayerSaving = false;
+      state.prayerError =
+        err?.message === "auth"
+          ? "이 이름으로는 시트에 남길 수 없어요"
+          : err?.message === "empty"
+            ? "내용을 적어 주세요"
+            : "시트에 남기지 못했어요";
+      renderKeepingScroll();
+    }
+  }
+
   async function flushCoramSave() {
     const week = coramWeekKey();
     const draft = state.coramDrafts[week];
@@ -699,7 +889,11 @@
         "",
         `&sheet=${encodeURIComponent("코람데오")}&headers=1`
       ).catch(() => null);
-      const [membersTable, eventsTable, placesTable, linksTable, versionTable, rosterTable, coramTable] =
+      const prayerPromise = loadGviz(
+        "",
+        `&sheet=${encodeURIComponent("기도제목")}&headers=1`
+      ).catch(() => null);
+      const [membersTable, eventsTable, placesTable, linksTable, versionTable, rosterTable, coramTable, prayerTable] =
         await Promise.all([
           loadGviz(GIDS.members),
           loadGviz(GIDS.schedule),
@@ -708,6 +902,7 @@
           versionPromise,
           rosterPromise,
           coramPromise,
+          prayerPromise,
         ]);
       state.members = parseMembers(membersTable);
       state.events = parseEvents(eventsTable);
@@ -717,6 +912,20 @@
       state.rosterReady = Boolean(rosterTable);
       state.coramRows = parseCoram(coramTable);
       state.coramReady = Boolean(coramTable);
+      if (prayerMissPreview()) {
+        state.prayerReady = false;
+      } else if (prayerTable) {
+        state.prayers = parsePrayers(prayerTable);
+        state.prayerReady = true;
+      } else {
+        state.prayerReady = false;
+      }
+      if (!state.prayerReady) {
+        state.prayerEditing = false;
+        state.prayerCompose = "";
+        state.prayerHistoryOpen = false;
+        state.prayerClearAsk = false;
+      }
       if (state.coramSave !== "saving" && state.coramSave !== "error") state.coramDrafts = {};
       state.scheduleVersion = parseScheduleVersion(versionTable);
       const saved = readSession();
@@ -754,24 +963,6 @@
     if (event.category !== "대청부" || weekdayIndex(event.date) !== 0) return "";
     if (String(event.title).includes("GBS 없음")) return "";
     return state.places[ymd(event.date)] || "";
-  }
-
-  function birthdaySets(today, range) {
-    const week = [];
-    const month = [];
-    for (const member of state.members) {
-      if (!member.birth) continue;
-      const inWeek = [...Array(7)].some((_, i) => {
-        const day = addDays(range.start, i);
-        return day.m === member.birth.m && day.d === member.birth.d;
-      });
-      if (inWeek) week.push(member);
-      if (member.birth.m === today.m) month.push(member);
-    }
-    const byDate = (a, b) => a.birth.m * 100 + a.birth.d - (b.birth.m * 100 + b.birth.d);
-    week.sort(byDate);
-    month.sort(byDate);
-    return { week, month };
   }
 
   function groupedMembers() {
@@ -843,6 +1034,36 @@
   }
   function iconPeople(active) {
     return `<svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="${active ? "2.2" : "1.8"}"><circle cx="9" cy="8" r="3"/><path d="M4 19c.5-3 2.4-5 5-5s4.5 2 5 5"/><circle cx="16.5" cy="8.5" r="2.4"/><path d="M16 14.2c2.2.3 3.8 2.2 4.3 4.8"/></svg>`;
+  }
+  function iconPray() {
+    return `<svg viewBox="0 0 256 256" class="h-4 w-4" fill="currentColor" aria-hidden="true"><path d="M235.32 180 199.08 143.75 162.62 23.46A21.76 21.76 0 0 0 128 12.93 21.76 21.76 0 0 0 93.38 23.46L56.92 143.76 20.68 180a16 16 0 0 0 0 22.62l32.69 32.69a16 16 0 0 0 22.63 0L124.28 187a40.7 40.7 0 0 0 3.72-4.29 40.7 40.7 0 0 0 3.72 4.29L180 235.32a16 16 0 0 0 22.63 0l32.69-32.69a16 16 0 0 0 0-22.63ZM64.68 224 32 191.32l12.69-12.69 32.69 32.69ZM120 158.75a23.85 23.85 0 0 1-7 17L88.68 200 56 167.32l13.65-13.66a8 8 0 0 0 2-3.34l37-122.22A5.78 5.78 0 0 1 120 29.78Zm23 17a23.85 23.85 0 0 1-7-17v-129a5.78 5.78 0 0 1 11.31-1.68l37 122.22a8 8 0 0 0 2 3.34l14.49 14.49-33.4 32ZM191.32 224l-12.56-12.57 33.39-32L224 191.32Z"/></svg>`;
+  }
+  function iconPencil() {
+    return `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>`;
+  }
+
+  function iconPlus() {
+    return `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
+  }
+
+  function iconChevron(dir = "right", klass = "h-4 w-4 shrink-0") {
+    const d = dir === "left" ? "m15 6-6 6 6 6" : "m9 6 6 6-6 6";
+    return `<svg viewBox="0 0 24 24" class="${klass}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+  }
+
+  function navChevron() {
+    return `<span class="shrink-0 text-stone-400">${iconChevron("right")}</span>`;
+  }
+
+  function navCardButton({ action, extra = "", title, sub = "" }) {
+    return `
+      <button type="button" data-action="${action}" ${extra} class="flex w-full items-center gap-2 rounded-[24px] border border-stone-200/80 bg-ivory py-3.5 pl-5 pr-3.5 text-left active:bg-cream">
+        <span class="min-w-0 flex-1">
+          <span class="block text-[16px] font-medium">${title}</span>
+          ${sub ? `<span class="mt-1 block text-[12px] text-muted">${sub}</span>` : ""}
+        </span>
+        ${navChevron()}
+      </button>`;
   }
   function cloneCoram(record) {
     return {
@@ -1035,7 +1256,7 @@
                 </span>
                 <span class="mt-1 block text-[12px] text-muted">${esc(m.peer)}또래 · ${formatMd(m.birth) || "생일 미등록"}</span>
               </span>
-              <span class="shrink-0 text-[16px] leading-none text-stone-400" aria-hidden="true">›</span>
+              <span class="shrink-0 text-stone-400">${iconPray()}</span>
             </button>`;
           })
           .join("")}
@@ -1767,13 +1988,12 @@
           title: "QT",
           body: coramDayButtons("qt", record.qtDays, start),
         })}
-        <button type="button" data-action="coram-pane" data-pane="term" class="flex w-full items-center justify-between rounded-[24px] border border-stone-200/80 bg-ivory px-4 py-4 text-left">
-          <span>
-            <span class="block text-[16px] font-semibold">이번 텀 한 눈에 보기</span>
-            <span class="mt-1 block text-[13px] text-muted">9월 13일–3월 13일</span>
-          </span>
-          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-stone-400" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
-        </button>
+        ${navCardButton({
+          action: "coram-pane",
+          extra: `data-pane="term"`,
+          title: "이번 텀 한 눈에 보기",
+          sub: "9월 13일–3월 13일",
+        })}
         ${coramStatus()}
       </div>`;
   }
@@ -1820,7 +2040,7 @@
       ? `<div class="mt-3 rounded-2xl bg-cream px-3 py-3">
           <div class="flex items-center justify-between gap-2">
             <p class="text-[14px] font-medium">${focus.m}월 ${focus.d}일 ${WEEKDAYS[weekdayIndex(focus)]}</p>
-            <button type="button" data-action="coram-jump-week" data-date="${isoDate(focus)}" class="inline-flex shrink-0 items-center gap-0.5 text-[13px] font-semibold text-terra">이 주 기록 수정하기<svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+            <button type="button" data-action="coram-jump-week" data-date="${isoDate(focus)}" class="inline-flex shrink-0 items-center gap-0.5 text-[13px] font-semibold text-terra">이 주 기록 수정하기${iconChevron("right", "h-3.5 w-3.5")}</button>
           </div>
           ${coramDayDetail(focusEntry, focus)}
         </div>`
@@ -1899,10 +2119,169 @@
     return `${member.name} ${title}님`;
   }
 
+  function homePrayerCard() {
+    const mine = prayerOf(state.sessionName);
+    const sub = !state.prayerReady
+      ? "기도제목을 불러오지 못했어요. 지기에게 문의해주세요."
+      : mine.updated
+        ? `마지막 업데이트 ${mine.updated}`
+        : mine.text
+          ? ""
+          : "아직 적은 기도제목이 없습니다";
+    return `
+      <div class="mx-5 mt-4">
+        ${navCardButton({ action: "open-my-prayer", title: "내 기도제목", sub: esc(sub) })}
+      </div>`;
+  }
+
+  function prayerMissingBody() {
+    return `<p class="mt-2 text-[14px] leading-relaxed text-muted">기도제목을 불러오지 못했어요. 지기에게 문의해주세요.</p>`;
+  }
+
+  function prayerReadBody(prayer, empty = "아직 기도제목이 없어요", showUpdated = true) {
+    if (!prayer.text) return `<p class="mt-2 text-[14px] text-muted">${esc(empty)}</p>`;
+    return `<p class="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed">${esc(prayer.text)}</p>
+      ${showUpdated && prayer.updated ? `<p class="mt-3 text-[12px] text-muted">마지막 업데이트 ${esc(prayer.updated)}</p>` : ""}`;
+  }
+
+  function prayerClearCopy() {
+    const mine = prayerOf(state.sessionName);
+    if ((mine.history || []).length) return "기도제목을 지울까요? 지난 기도제목은 시트에 남습니다.";
+    return "기도제목을 지울까요? 지금 시트에 있는 글이 사라집니다.";
+  }
+
+  function prayerEditorFields() {
+    const ask = state.prayerClearAsk;
+    const creating = state.prayerCompose === "new";
+    const saveLabel = state.prayerSaving ? (ask ? "지우는 중" : "저장하고 있어요") : ask ? "지우기" : creating ? "남기기" : "저장";
+    return `
+      <textarea id="prayer-draft"
+        class="mt-4 min-h-[12rem] w-full flex-1 resize-none rounded-2xl border border-stone-200 bg-cream px-4 py-3 text-[15px] leading-relaxed outline-none focus:border-terra"
+        placeholder="${creating ? "새로 기도할 내용을 적어 주세요" : "함께 기도할 내용을 적어 주세요"}">${esc(state.prayerDraft)}</textarea>
+      ${state.prayerError ? `<p class="mt-2 shrink-0 text-[13px] text-terra">${esc(state.prayerError)}</p>` : ""}
+      ${
+        ask
+          ? `<p class="mt-3 shrink-0 text-[14px] leading-relaxed text-ink">${esc(prayerClearCopy())}</p>
+            <div class="mt-3 flex shrink-0 gap-2">
+              <button type="button" data-action="cancel-clear-prayer" class="h-[52px] flex-1 rounded-2xl border border-stone-200 text-[16px] font-medium text-ink active:bg-cream">돌아가기</button>
+              <button type="button" data-action="save-prayer" class="h-[52px] flex-1 rounded-2xl bg-terra text-[16px] font-semibold text-ivory" ${state.prayerSaving ? "disabled" : ""}>${esc(saveLabel)}</button>
+            </div>`
+          : `<button type="button" data-action="save-prayer" class="mt-3 h-[52px] w-full shrink-0 rounded-2xl bg-terra text-[16px] font-semibold text-ivory" ${state.prayerSaving ? "disabled" : ""}>${esc(saveLabel)}</button>`
+      }`;
+  }
+
+  function prayerHistoryPreview() {
+    if (!/[?&]history-mock(?:&|=|$)/.test(location.search)) return null;
+    return [
+      { updated: "9월 28일", text: "예시입니다. 새 기도제목을 남기면 그때까지 쓰던 글이 날짜와 함께 여기에 쌓입니다." },
+      { updated: "9월 21일", text: "예시입니다. 위의 날짜를 누르면 목록은 그 날짜로 내려가고, 날짜 줄은 위에 남습니다." },
+      { updated: "9월 14일", text: "예시입니다. 수정으로 고친 내용은 지난 기도제목에 남지 않습니다." },
+      { updated: "9월 7일", text: "예시입니다. 더 예전 기도제목도 같은 방식으로 이어서 보입니다." },
+      { updated: "8월 31일", text: "예시입니다. 날짜를 누르면 그 글이 목록 맨 위로 올라옵니다." },
+      { updated: "8월 24일", text: "예시입니다. 제목과 날짜 줄은 그 자리에 그대로 있습니다." },
+      { updated: "8월 17일", text: "예시입니다. 같은 날 글이 여러 개면 그 날짜의 첫 글로 갑니다." },
+      { updated: "8월 10일", text: "예시입니다. 가장 예전 기도제목입니다." },
+    ];
+  }
+
+  function prayerHistoryEntries(prayer) {
+    return prayerHistoryPreview() || prayer.history || [];
+  }
+
+  function prayerHistoryDates(entries) {
+    const seen = [];
+    entries.forEach((item, index) => {
+      const label = item.updated || "";
+      if (!label || seen.some((date) => date.label === label)) return;
+      seen.push({ label, index });
+    });
+    return seen;
+  }
+
+  function prayerHistoryBody(prayer) {
+    const history = prayerHistoryEntries(prayer);
+    if (!history.length) return `<p class="px-0 py-4 text-[14px] text-muted">아직 지난 기도제목이 없습니다</p>`;
+    return history
+      .map(
+        (item, index) => `
+        <article id="prayer-history-${index}" data-history-date="${esc(item.updated || "")}" class="border-t border-stone-100 py-4 first:border-t-0">
+          <p class="text-[12px] font-medium text-sage">${esc(item.updated || "")}</p>
+          <p class="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed">${esc(item.text)}</p>
+        </article>`
+      )
+      .join("");
+  }
+
+  function prayerHistoryDateClass(on) {
+    return `shrink-0 -mb-px border-b-2 pb-2.5 pt-1 text-[14px] ${on ? "border-sage font-semibold text-sage" : "border-transparent font-medium text-stone-400"}`;
+  }
+
+  function prayerHistoryPanel(prayer) {
+    const entries = prayerHistoryEntries(prayer);
+    const dates = prayerHistoryDates(entries);
+    const selected = state.prayerHistoryJump || dates[0]?.label || "";
+    return `
+      <div class="mt-3 flex min-h-0 flex-1 flex-col">
+        ${
+          dates.length
+            ? `<div class="-mx-5 shrink-0 border-b border-stone-200/80" style="box-shadow: 0 6px 10px -6px rgba(28,25,23,0.22)">
+                <div class="flex gap-5 overflow-x-auto hide-scroll px-5">
+                ${dates
+                  .map((date) => {
+                    const on = date.label === selected;
+                    return `<button type="button" data-action="jump-prayer-history" data-history-jump="${esc(date.label)}" class="${prayerHistoryDateClass(on)}">${esc(date.label)}</button>`;
+                  })
+                  .join("")}
+                </div>
+              </div>`
+            : ""
+        }
+        <div id="prayer-history-scroll" class="min-h-0 flex-1 overflow-y-auto hide-scroll pt-1">
+          ${prayerHistoryPreview() ? `<p class="pb-1 text-[12px] text-muted">화면 예시입니다</p>` : ""}
+          ${prayerHistoryBody(prayer)}
+          ${entries.length > 1 ? `<div style="height: 100vh" aria-hidden="true"></div>` : ""}
+        </div>
+      </div>`;
+  }
+
+  function prayerIconButtons(prayer) {
+    const button =
+      "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-ivory text-ink active:bg-cream";
+    return `
+      <div class="flex shrink-0 gap-1.5">
+        ${
+          prayer.text
+            ? `<button type="button" data-action="edit-prayer" aria-label="수정" class="${button}">${iconPencil()}</button>`
+            : ""
+        }
+        <button type="button" data-action="new-prayer" aria-label="새 기도제목" class="${button}">${iconPlus()}</button>
+      </div>`;
+  }
+
+  function prayerHistoryLink() {
+    return `<button type="button" data-action="open-prayer-history" class="mt-4 flex h-[44px] w-full shrink-0 items-center justify-center gap-0.5 text-[14px] font-medium text-sage active:opacity-60"><span>지난 기도제목</span>${iconChevron("right", "h-4 w-4 shrink-0")}</button>`;
+  }
+
+  function memberNav() {
+    const prev = neighborMember(-1);
+    const next = neighborMember(1);
+    if (!prev || !next) return "";
+    return `
+      <div class="mt-3 flex shrink-0 items-center justify-between gap-2">
+        <button type="button" data-action="member-prev" class="flex max-w-[46%] items-center gap-0.5 rounded-full border border-stone-200 py-1 pl-1.5 pr-2.5 text-muted active:bg-cream">
+          ${iconChevron("left")}
+          <span class="min-w-0 truncate text-[13px] font-medium">${esc(prev.name)}</span>
+        </button>
+        <button type="button" data-action="member-next" class="flex max-w-[46%] items-center gap-0.5 rounded-full border border-stone-200 py-1 pl-2.5 pr-1.5 text-muted active:bg-cream">
+          <span class="min-w-0 truncate text-[13px] font-medium">${esc(next.name)}</span>
+          ${iconChevron("right")}
+        </button>
+      </div>`;
+  }
+
   function homeView(today, range) {
     const member = currentMember();
     const events = weekEvents(range);
-    const { week, month } = birthdaySets(today, range);
     return `
       <header class="px-5 pt-6">
         <p class="text-[13px] font-medium text-terra">사랑동산</p>
@@ -1924,41 +2303,7 @@
         </div>
       </section>
 
-      <section class="mx-5 mt-4 rounded-[24px] border border-stone-200/80 bg-ivory p-5">
-        <h2 class="text-[18px] font-semibold">생일자</h2>
-        ${
-          week.length
-            ? `<div class="mt-3 flex gap-3 overflow-x-auto hide-scroll pb-1">
-                ${week
-                  .map(
-                    (m) => `
-                  <div class="flex min-w-[92px] flex-col items-center rounded-2xl bg-gold/15 px-3 py-3">
-                    <span class="flex h-10 w-10 items-center justify-center rounded-full bg-gold/30 font-semibold leading-none whitespace-nowrap text-[#7A6230] ${initialClass(m.name, "text-[14px]", "text-[12px] tracking-tight")}">${esc(initialOf(m.name))}</span>
-                    <p class="mt-2 text-[13px] font-medium">${esc(m.name)}</p>
-                    <p class="text-[11px] text-muted">${formatMd(m.birth)}</p>
-                  </div>`
-                  )
-                  .join("")}
-              </div>`
-            : `<p class="mt-2 text-[14px] text-muted">이번 주 생일자가 없습니다</p>`
-        }
-        <p class="mt-4 text-[12px] font-semibold text-muted">이번 달</p>
-        ${
-          month.length
-            ? `<ul class="mt-1 space-y-1">
-                ${month
-                  .map(
-                    (m) => `
-                  <li class="flex items-center justify-between py-1 text-[14px]">
-                    <span>${esc(m.name)}</span>
-                    <span class="text-muted">${formatMd(m.birth)}</span>
-                  </li>`
-                  )
-                  .join("")}
-              </ul>`
-            : `<p class="mt-1 text-[14px] text-muted">이번 달 생일자가 없습니다</p>`
-        }
-      </section>
+      ${homePrayerCard()}
 
       <div class="px-5 pb-6 pt-8 text-center">
         <button data-action="logout" class="rounded-full border border-stone-200/70 px-5 py-2 text-[13px] text-stone-400">로그아웃</button>
@@ -1985,7 +2330,7 @@
           ? `<div class="absolute -left-2.5 top-[17.5px] -bottom-[33.5px] w-px -translate-x-1/2 bg-stone-200"></div>`
           : "";
         const isAnchor = anchorYmd != null && ymd(day[0].date) === anchorYmd;
-        return `<div class="relative mb-4"${isAnchor ? " data-schedule-anchor" : ""}>${line}${scheduleDay(day, today)}</div>`;
+        return `<div class="relative ${index === days.length - 1 ? "" : "mb-4"}"${isAnchor ? " data-schedule-anchor" : ""}>${line}${scheduleDay(day, today)}</div>`;
       })
       .join("");
   }
@@ -2006,7 +2351,7 @@
     const target = scroller?.querySelector("[data-schedule-anchor]");
     if (!scroller || !target) return;
     const header = scroller.querySelector("header");
-    const month = target.closest(".mb-5")?.querySelector("h2");
+    const month = target.closest("[data-schedule-month]")?.querySelector("h2");
     const headerH = header ? header.offsetHeight : 0;
     const monthH = month ? month.offsetHeight : 0;
     const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
@@ -2067,12 +2412,12 @@
             ? groups
                 .map(
                   (group) => `
-            <div class="mb-5">
-              <h2 class="sticky top-[var(--sticky-head,7.5rem)] z-20 -mx-5 bg-cream px-5 py-2 text-[13px] font-semibold text-muted">${esc(group.title)}</h2>
-              <div class="relative z-0 pl-5">
+            <section data-schedule-month="${esc(group.title)}">
+              <h2 class="sticky top-[var(--schedule-sticky,7.5rem)] z-20 -mx-5 bg-cream px-5 py-2 text-[13px] font-semibold text-muted shadow-[0_-2px_0_0_#F6F1EA]">${esc(group.title)}</h2>
+              <div class="relative pl-5">
                 ${scheduleRows(group.events, today, anchorYmd)}
               </div>
-            </div>`
+            </section>`
                 )
                 .join("")
             : `<p class="mt-8 text-center text-[14px] text-muted">해당하는 일정이 없습니다</p>`
@@ -2095,22 +2440,77 @@
   function memberSheet() {
     const m = state.selectedMember;
     if (!m) return "";
+    const prayer = prayerOf(m.name);
+    const body = state.prayerReady ? prayerReadBody(prayer) : prayerMissingBody();
+    const anim = state.memberSheetPaged ? "" : "sheet-up";
+    const place = "inset-x-0 bottom-0 h-auto max-h-[92dvh]";
     return `
       <div id="member-sheet-backdrop" class="absolute inset-0 z-40 bg-ink/30" data-action="close-member"></div>
-      <div id="member-sheet" class="absolute inset-x-0 bottom-0 z-50 rounded-t-[28px] bg-ivory px-5 pb-8 pt-1 shadow-sheet sheet-up" style="touch-action: none">
-        <div data-sheet-handle class="-mx-5 flex h-8 items-center justify-center" aria-hidden="true">
+      <div id="member-sheet" class="absolute ${place} z-50 flex flex-col overflow-hidden rounded-t-[28px] bg-ivory px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-1 shadow-sheet ${anim}">
+        <div data-sheet-handle class="-mx-5 flex h-8 shrink-0 items-center justify-center" style="touch-action: none" aria-hidden="true">
           <span class="h-1 w-10 rounded-full bg-stone-300"></span>
         </div>
-        <div>
-          <p class="text-[18px] font-semibold">${esc(m.name)}</p>
-          <p class="text-[13px] text-muted">${esc(m.peer)}또래${m.role ? ` · ${esc(m.role)}` : ""} · 생일 ${formatMd(m.birth) || "미등록"}</p>
+        <div class="flex shrink-0 items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-[18px] font-semibold">${esc(m.name)}</p>
+            <p class="text-[13px] text-muted">${esc(m.peer)}또래${m.role ? ` · ${esc(m.role)}` : ""} · 생일 ${formatMd(m.birth) || "미등록"}</p>
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            ${
+              m.phone
+                ? `<button type="button" data-action="copy-phone" class="mt-0.5 shrink-0 rounded-full border border-stone-200 px-3 py-1.5 text-[12px] font-medium text-muted active:bg-cream">번호 복사</button>`
+                : ""
+            }
+          </div>
+        </div>
+        <div class="mt-5 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-stone-100 pt-5">
+          <h2 class="shrink-0 text-[16px] font-semibold">기도제목</h2>
+          <div class="min-h-0 overflow-y-auto hide-scroll">${body}</div>
+        </div>
+        ${memberNav()}
+      </div>`;
+  }
+
+  function prayerEditSheet() {
+    if (!state.prayerEditOpen) return "";
+    const mine = prayerOf(state.sessionName);
+    const editing = state.prayerEditing;
+    const creating = state.prayerCompose === "new";
+    const history = state.prayerHistoryOpen;
+    const title = history ? "지난 기도제목" : creating ? "새 기도제목" : "내 기도제목";
+    const sub = history || !state.prayerReady
+      ? ""
+      : creating
+          ? "저장하면 지금 글은 지난 기도제목이 됩니다"
+          : mine.updated
+            ? `마지막 업데이트 ${mine.updated}`
+            : "구성원들과 함께 기도할 내용입니다";
+    const tall = editing || history;
+    return `
+      <div id="prayer-edit-backdrop" class="absolute inset-0 z-40 bg-ink/30" data-action="close-prayer-edit"></div>
+      <div id="prayer-edit-sheet" class="absolute ${tall ? "inset-x-0 top-4 bottom-0" : "inset-x-0 bottom-0 h-auto max-h-[92dvh]"} z-50 flex flex-col overflow-hidden rounded-t-[28px] bg-ivory px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-1 shadow-sheet ${tall ? "" : "sheet-up"}">
+        <div data-sheet-handle class="-mx-5 flex h-8 shrink-0 items-center justify-center" style="touch-action: none" aria-hidden="true">
+          <span class="h-1 w-10 rounded-full bg-stone-300"></span>
+        </div>
+        <div class="flex shrink-0 items-start justify-between gap-3">
+          <div class="min-w-0">
+            ${history ? `<button type="button" data-action="close-prayer-history" class="block text-[13px] font-medium text-terra">‹ 내 기도제목</button>` : ""}
+            <p class="${history ? "mt-3 " : ""}text-[18px] font-semibold">${esc(title)}</p>
+            ${sub ? `<p class="mt-1 text-[13px] text-muted">${esc(sub)}</p>` : ""}
+          </div>
+          ${!editing && !history && state.prayerReady ? prayerIconButtons(mine) : ""}
         </div>
         ${
-          m.phone
-            ? `
-          <p class="mt-6 text-center text-[28px] font-semibold tracking-wide">${esc(m.phone)}</p>
-          <button data-action="copy-phone" class="mt-5 h-[52px] w-full rounded-2xl bg-terra text-[16px] font-semibold text-ivory">번호 복사</button>`
-            : `<p class="mt-6 text-center text-[14px] text-muted">등록된 전화번호가 없습니다</p>`
+          editing
+            ? `<div class="flex min-h-0 flex-1 flex-col">${prayerEditorFields()}</div>`
+            : history
+              ? prayerHistoryPanel(mine)
+              : `<div class="mt-3 min-h-0 overflow-y-auto hide-scroll border-t border-stone-100 pt-3">${state.prayerReady ? prayerReadBody(mine, "아직 적은 기도제목이 없습니다", false) : prayerMissingBody()}</div>
+              ${state.prayerReady ? `${prayerHistoryLink()}
+              <button type="button" data-action="open-member-prayers" class="mt-1 flex min-h-[52px] w-full shrink-0 items-center justify-center gap-1 rounded-2xl bg-terra px-4 py-3 text-[15px] font-semibold text-ivory active:opacity-90">
+                <span>사랑동산을 위해 기도하기</span>
+                ${iconChevron("right", "h-4 w-4 shrink-0")}
+              </button>` : ""}`
         }
       </div>`;
   }
@@ -2166,10 +2566,13 @@
         ${tabbar()}
       </div>
       ${memberSheet()}
+      ${prayerEditSheet()}
       ${toastView()}`;
     bind();
     bindPullToRefresh();
-    bindSheetDrag("member-sheet", "member-sheet-backdrop", "close-member");
+    bindSheetDrag("member-sheet", "member-sheet-backdrop", "close-member", { handleOnly: true });
+    bindMemberSwipe();
+    bindSheetDrag("prayer-edit-sheet", "prayer-edit-backdrop", "close-prayer-edit", { handleOnly: true });
     bindSheetDrag("diary-trend-sheet", "diary-trend-backdrop", "close-diary-trend", { handleOnly: true });
     if (stickyHeadObserver) {
       stickyHeadObserver.disconnect();
@@ -2268,11 +2671,88 @@
     sheet.addEventListener("pointercancel", end);
   }
 
+  function bindMemberSwipe() {
+    const sheet = document.getElementById("member-sheet");
+    if (!sheet || state.prayerEditing || state.members.length < 2) return;
+    let startX = 0;
+    let startY = 0;
+    let dx = 0;
+    let mode = "";
+    let pointerId = null;
+
+    function reset() {
+      mode = "";
+      pointerId = null;
+      dx = 0;
+      sheet.style.transition = "transform 0.2s ease";
+      sheet.style.transform = "";
+    }
+
+    sheet.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button, textarea, [data-sheet-handle]")) return;
+      mode = "pending";
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startY = event.clientY;
+      dx = 0;
+    });
+
+    sheet.addEventListener(
+      "pointermove",
+      (event) => {
+        if (!mode || event.pointerId !== pointerId) return;
+        const moveX = event.clientX - startX;
+        const moveY = event.clientY - startY;
+        if (mode === "pending") {
+          if (Math.abs(moveX) < 12 && Math.abs(moveY) < 12) return;
+          if (Math.abs(moveY) >= Math.abs(moveX) * 0.9) {
+            mode = "";
+            return;
+          }
+          mode = "swipe";
+          sheet.classList.remove("sheet-up");
+          sheet.style.transition = "none";
+          try {
+            sheet.setPointerCapture(event.pointerId);
+          } catch {
+            /* unsupported */
+          }
+        }
+        if (mode !== "swipe") return;
+        dx = moveX;
+        if (event.cancelable) event.preventDefault();
+        sheet.style.transform = `translateX(${dx * 0.35}px)`;
+      },
+      { passive: false }
+    );
+
+    function finish(event) {
+      if (!mode || event.pointerId !== pointerId) return;
+      const swiped = mode === "swipe" && Math.abs(dx) > 56;
+      const goNext = dx < 0;
+      reset();
+      if (!swiped) return;
+      const next = neighborMember(goNext ? 1 : -1);
+      if (next) selectMember(next.name, { paged: true, keepScroll: true });
+    }
+
+    sheet.addEventListener("pointerup", finish);
+    sheet.addEventListener("pointercancel", (event) => {
+      if (event.pointerId !== pointerId) return;
+      reset();
+    });
+  }
+
   function bindList(root) {
     root.querySelectorAll("[data-action]").forEach((el) => {
       el.addEventListener("click", (event) => {
         const action = el.getAttribute("data-action");
-        if (action === "close-name-picker" || action === "close-member" || action === "close-diary-trend") {
+        if (
+          action === "close-name-picker" ||
+          action === "close-member" ||
+          action === "close-diary-trend" ||
+          action === "close-prayer-edit"
+        ) {
           event.stopPropagation();
         }
         handleAction(action, el);
@@ -2402,6 +2882,16 @@
         });
       }
     });
+    const area = document.getElementById("prayer-draft");
+    if (area) {
+      area.addEventListener("input", () => {
+        state.prayerDraft = area.value;
+        if (!state.prayerClearAsk) return;
+        state.prayerClearAsk = false;
+        renderKeepingScroll();
+        requestAnimationFrame(() => document.getElementById("prayer-draft")?.focus());
+      });
+    }
   }
 
   function loginErrorMessage(code) {
@@ -2629,6 +3119,13 @@
       state.tab = next;
       state.memberQuery = "";
       state.selectedMember = null;
+      state.memberSheetPaged = false;
+      state.prayerEditOpen = false;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = false;
+      state.prayerClearAsk = false;
+      state.prayerError = "";
       location.hash = state.tab;
       render();
       return;
@@ -2640,14 +3137,128 @@
       return;
     }
     if (action === "open-member") {
-      const name = el.getAttribute("data-name");
-      state.selectedMember = state.members.find((m) => m.name === name) || null;
+      selectMember(el.getAttribute("data-name"), { paged: false });
+      return;
+    }
+    if (action === "open-my-prayer") {
+      state.selectedMember = null;
+      state.prayerDraft = prayerOf(state.sessionName).text;
+      state.prayerEditOpen = true;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = false;
+      state.prayerClearAsk = false;
+      state.prayerError = "";
       render();
+      return;
+    }
+    if (action === "member-prev" || action === "member-next") {
+      const next = neighborMember(action === "member-prev" ? -1 : 1);
+      if (next) selectMember(next.name, { paged: true, keepScroll: true });
       return;
     }
     if (action === "close-member") {
       state.selectedMember = null;
+      state.memberSheetPaged = false;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = false;
+      state.prayerClearAsk = false;
+      state.prayerError = "";
       render();
+      return;
+    }
+    if (action === "edit-prayer") {
+      if (!state.prayerReady) return;
+      state.prayerDraft = prayerOf(state.sessionName).text;
+      state.prayerEditing = true;
+      state.prayerCompose = "edit";
+      state.prayerHistoryOpen = false;
+      state.prayerClearAsk = false;
+      state.prayerError = "";
+      render();
+      requestAnimationFrame(() => document.getElementById("prayer-draft")?.focus());
+      return;
+    }
+    if (action === "new-prayer") {
+      if (!state.prayerReady) return;
+      state.prayerDraft = "";
+      state.prayerEditing = true;
+      state.prayerCompose = "new";
+      state.prayerHistoryOpen = false;
+      state.prayerClearAsk = false;
+      state.prayerError = "";
+      render();
+      requestAnimationFrame(() => document.getElementById("prayer-draft")?.focus());
+      return;
+    }
+    if (action === "open-prayer-history") {
+      if (!state.prayerReady) return;
+      const dates = prayerHistoryDates(prayerHistoryEntries(prayerOf(state.sessionName)));
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = true;
+      state.prayerHistoryJump = dates[0]?.label || "";
+      state.prayerClearAsk = false;
+      state.prayerError = "";
+      render();
+      return;
+    }
+    if (action === "jump-prayer-history") {
+      const label = el.getAttribute("data-history-jump") || "";
+      state.prayerHistoryJump = label;
+      document.querySelectorAll("[data-history-jump]").forEach((button) => {
+        const on = button.getAttribute("data-history-jump") === label;
+        button.className = prayerHistoryDateClass(on);
+      });
+      const scroller = document.getElementById("prayer-history-scroll");
+      const target = [...(scroller?.querySelectorAll("[data-history-date]") || [])].find(
+        (node) => node.getAttribute("data-history-date") === label
+      );
+      if (scroller && target) {
+        const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+        scroller.scrollTop = top;
+      }
+      return;
+    }
+    if (action === "close-prayer-history") {
+      state.prayerHistoryOpen = false;
+      state.prayerHistoryJump = "";
+      render();
+      return;
+    }
+    if (action === "close-prayer-edit") {
+      state.prayerEditOpen = false;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = false;
+      state.prayerClearAsk = false;
+      state.prayerError = "";
+      render();
+      return;
+    }
+    if (action === "cancel-clear-prayer") {
+      state.prayerClearAsk = false;
+      state.prayerDraft = prayerOf(state.sessionName).text;
+      render();
+      requestAnimationFrame(() => document.getElementById("prayer-draft")?.focus());
+      return;
+    }
+    if (action === "open-member-prayers") {
+      state.prayerEditOpen = false;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = false;
+      state.prayerClearAsk = false;
+      state.prayerError = "";
+      state.selectedMember = null;
+      state.tab = "members";
+      location.hash = "members";
+      render();
+      return;
+    }
+    if (action === "save-prayer") {
+      savePrayer();
       return;
     }
     if (action === "copy-phone" && state.selectedMember) {
