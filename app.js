@@ -559,17 +559,29 @@
     return state.prayers[name] || { text: "", updated: "", history: [] };
   }
 
-  function prayerTime(item, order) {
+  function prayerStamp(item) {
     const text = String(item?.f || item?.v || "").trim();
-    const stamped = text.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/);
-    if (stamped) {
-      const time = new Date(
-        Number(stamped[1]),
-        Number(stamped[2]) - 1,
-        Number(stamped[3]),
-        Number(stamped[4] || 0),
-        Number(stamped[5] || 0)
-      ).getTime();
+    const match = text.match(
+      /^(\d{4})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2})(?:\s*(오전|오후)?\s*(\d{1,2}):(\d{2}))?/
+    );
+    if (!match) return null;
+    let hour = Number(match[5] || 0);
+    const minute = Number(match[6] || 0);
+    if (match[4] === "오후" && hour < 12) hour += 12;
+    if (match[4] === "오전" && hour === 12) hour = 0;
+    return {
+      y: Number(match[1]),
+      m: Number(match[2]),
+      d: Number(match[3]),
+      hour,
+      minute,
+    };
+  }
+
+  function prayerTime(item, order) {
+    const stamp = prayerStamp(item);
+    if (stamp) {
+      const time = new Date(stamp.y, stamp.m - 1, stamp.d, stamp.hour, stamp.minute).getTime();
       if (!Number.isNaN(time)) return time + order / 1000;
     }
     const date = parseGvizDate(item?.v, item?.f);
@@ -578,9 +590,8 @@
   }
 
   function prayerUpdatedLabel(item) {
-    const text = String(item?.f || item?.v || "").trim();
-    const stamped = text.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
-    if (stamped) return `${Number(stamped[2])}월 ${Number(stamped[3])}일`;
+    const stamp = prayerStamp(item);
+    if (stamp) return `${stamp.m}월 ${stamp.d}일`;
     const date = parseGvizDate(item?.v, item?.f);
     return date?.m ? `${date.m}월 ${date.d}일` : "";
   }
