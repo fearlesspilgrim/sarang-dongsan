@@ -745,7 +745,7 @@
       state.prayerSaving = false;
       state.prayerEditing = false;
       state.prayerCompose = "";
-      state.prayerError = "기도제목을 불러오지 못했어요";
+      state.prayerError = "기도제목을 불러오지 못했어요. 지기에게 문의해주세요.";
       renderKeepingScroll();
       return;
     }
@@ -1695,7 +1695,7 @@
   function homePrayerCard() {
     const mine = prayerOf(state.sessionName);
     const sub = !state.prayerReady
-      ? "기도제목을 불러오지 못했어요"
+      ? "기도제목을 불러오지 못했어요. 지기에게 문의해주세요."
       : mine.updated
         ? `마지막 업데이트 ${mine.updated}`
         : mine.text
@@ -1708,7 +1708,7 @@
   }
 
   function prayerMissingBody() {
-    return `<p class="mt-2 text-[14px] leading-relaxed text-muted">기도제목을 불러오지 못했어요</p>`;
+    return `<p class="mt-2 text-[14px] leading-relaxed text-muted">기도제목을 불러오지 못했어요. 지기에게 문의해주세요.</p>`;
   }
 
   function prayerReadBody(prayer, empty = "아직 기도제목이 없어요", showUpdated = true) {
