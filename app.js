@@ -83,6 +83,7 @@
     prayerEditing: false,
     prayerSaving: false,
     prayerClearAsk: false,
+    prayerDeleteAsk: false,
     prayerCompose: "",
     prayerHistoryOpen: false,
     prayerHistoryJump: "",
@@ -621,6 +622,7 @@
     state.prayerCompose = "";
     state.prayerHistoryOpen = false;
     state.prayerClearAsk = false;
+    state.prayerDeleteAsk = false;
     state.prayerError = "";
     state.memberSheetPaged = paged;
     if (state.selectedMember?.name === state.sessionName) {
@@ -764,6 +766,65 @@
     state.prayers = { ...state.prayers, [name]: next };
   }
 
+  function applyDeletedPrayer(name, text, stamp) {
+    const current = prayerOf(name);
+    const history = (current.history || []).slice();
+    const nextText = String(text || "");
+    if (nextText && history[0] && history[0].text === nextText) history.shift();
+    const label = stamp ? prayerUpdatedLabel({ v: stamp, f: stamp }) : "";
+    state.prayers = {
+      ...state.prayers,
+      [name]: {
+        text: nextText,
+        updated: label,
+        time: nextText || label ? Date.now() : 0,
+        history,
+      },
+    };
+  }
+
+  async function deletePrayer() {
+    if (!state.sessionName || state.prayerSaving) return;
+    if (!state.prayerReady) {
+      state.prayerSaving = false;
+      state.prayerDeleteAsk = false;
+      state.prayerError = "기도제목을 불러오지 못했어요. 지기에게 문의해주세요.";
+      renderKeepingScroll();
+      return;
+    }
+    const current = prayerOf(state.sessionName);
+    if (!current.text) {
+      state.prayerDeleteAsk = false;
+      render();
+      return;
+    }
+    state.prayerSaving = true;
+    state.prayerError = "";
+    renderKeepingScroll();
+    try {
+      const result = await postPrayer(current.text, "delete");
+      if (!result?.deleted) {
+        state.prayerSaving = false;
+        state.prayerError = "시트에서 지우지 못했어요";
+        renderKeepingScroll();
+        return;
+      }
+      applyDeletedPrayer(state.sessionName, result.text, result.updated);
+      state.prayerSaving = false;
+      state.prayerDeleteAsk = false;
+      state.prayerEditing = false;
+      state.prayerCompose = "";
+      state.prayerHistoryOpen = false;
+      state.prayerDraft = prayerOf(state.sessionName).text;
+      showToast("기도제목을 지웠어요");
+    } catch (err) {
+      state.prayerSaving = false;
+      state.prayerError =
+        err?.message === "auth" ? "이 이름으로는 시트에 남길 수 없어요" : "시트에서 지우지 못했어요";
+      renderKeepingScroll();
+    }
+  }
+
   async function savePrayer() {
     const area = document.getElementById("prayer-draft");
     const next = String(area ? area.value : state.prayerDraft).trim();
@@ -791,6 +852,7 @@
       return;
     }
     state.prayerClearAsk = false;
+    state.prayerDeleteAsk = false;
     state.prayerDraft = next;
     state.prayerSaving = true;
     state.prayerError = "";
@@ -942,6 +1004,7 @@
         state.prayerCompose = "";
         state.prayerHistoryOpen = false;
         state.prayerClearAsk = false;
+        state.prayerDeleteAsk = false;
       }
       if (state.coramSave !== "saving" && state.coramSave !== "error") state.coramDrafts = {};
       state.scheduleVersion = parseScheduleVersion(versionTable);
@@ -1061,6 +1124,10 @@
 
   function iconPlus() {
     return `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
+  }
+
+  function iconTrash() {
+    return `<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 7h15"/><path d="M9 7V5.2c0-.7.5-1.2 1.2-1.2h3.6c.7 0 1.2.5 1.2 1.2V7"/><path d="M7.2 7.5 8.2 20h7.6l1-12.5"/></svg>`;
   }
 
   function iconChevron(dir = "right", klass = "h-4 w-4 shrink-0") {
@@ -2263,15 +2330,37 @@
 
   function prayerIconButtons(prayer) {
     const button =
-      "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-ivory text-ink active:bg-cream";
+      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-cream text-ink active:opacity-60";
     return `
-      <div class="flex shrink-0 gap-1.5">
+      <div class="flex shrink-0 items-center gap-1.5">
         ${
           prayer.text
             ? `<button type="button" data-action="edit-prayer" aria-label="수정" class="${button}">${iconPencil()}</button>`
             : ""
         }
         <button type="button" data-action="new-prayer" aria-label="새 기도제목" class="${button}">${iconPlus()}</button>
+        ${
+          prayer.text
+            ? `<button type="button" data-action="ask-delete-prayer" aria-label="지우기" class="${button}" style="color:#A8A29E">${iconTrash()}</button>`
+            : ""
+        }
+      </div>`;
+  }
+
+  function prayerDeleteDialog() {
+    if (!state.prayerDeleteAsk) return "";
+    const busy = state.prayerSaving;
+    return `
+      <div class="absolute inset-0 z-[70] flex items-center justify-center bg-ink/45 px-7" data-action="cancel-delete-prayer">
+        <div class="w-full rounded-[22px] bg-ivory px-5 pb-4 pt-6 shadow-sheet" role="dialog" aria-labelledby="prayer-delete-title" data-action="stay-delete-prayer">
+          <h2 id="prayer-delete-title" class="text-[17px] font-semibold">이 기도제목을 지울까요?</h2>
+          <p class="mt-2 text-[14px] leading-relaxed text-muted">지난 기도제목이 내 기도제목이 됩니다.</p>
+          ${state.prayerError ? `<p class="mt-2 text-[13px] text-terra">${esc(state.prayerError)}</p>` : ""}
+          <div class="mt-5 flex gap-2">
+            <button type="button" data-action="cancel-delete-prayer" class="h-11 flex-1 rounded-[14px] border border-stone-200 text-[15px] font-semibold text-ink active:bg-cream" ${busy ? "disabled" : ""}>돌아가기</button>
+            <button type="button" data-action="confirm-delete-prayer" class="h-11 flex-1 rounded-[14px] bg-terra text-[15px] font-semibold text-ivory" ${busy ? "disabled" : ""}>${busy ? "지우는 중" : "지우기"}</button>
+          </div>
+        </div>
       </div>`;
   }
 
@@ -2545,7 +2634,8 @@
                 ${iconChevron("right", "h-4 w-4 shrink-0")}
               </button>` : ""}`
         }
-      </div>`;
+      </div>
+      ${prayerDeleteDialog()}`;
   }
 
   function toastView() {
@@ -2907,7 +2997,10 @@
           action === "close-name-picker" ||
           action === "close-member" ||
           action === "close-diary-trend" ||
-          action === "close-prayer-edit"
+          action === "close-prayer-edit" ||
+          action === "cancel-delete-prayer" ||
+          action === "confirm-delete-prayer" ||
+          action === "stay-delete-prayer"
         ) {
           event.stopPropagation();
         }
@@ -3282,6 +3375,7 @@
       state.prayerCompose = "";
       state.prayerHistoryOpen = false;
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       location.hash = state.tab;
       render();
@@ -3305,6 +3399,7 @@
       state.prayerCompose = "";
       state.prayerHistoryOpen = false;
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       render();
       return;
@@ -3325,6 +3420,7 @@
       state.prayerCompose = "";
       state.prayerHistoryOpen = false;
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       render();
       return;
@@ -3336,6 +3432,7 @@
       state.prayerCompose = "edit";
       state.prayerHistoryOpen = false;
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       render();
       requestAnimationFrame(() => document.getElementById("prayer-draft")?.focus());
@@ -3348,6 +3445,7 @@
       state.prayerCompose = "new";
       state.prayerHistoryOpen = false;
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       render();
       requestAnimationFrame(() => document.getElementById("prayer-draft")?.focus());
@@ -3361,6 +3459,7 @@
       state.prayerHistoryOpen = true;
       state.prayerHistoryJump = dates[0]?.label || "";
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       render();
       return;
@@ -3394,12 +3493,14 @@
       state.prayerCompose = "";
       state.prayerHistoryOpen = false;
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       render();
       return;
     }
     if (action === "cancel-clear-prayer") {
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerDraft = prayerOf(state.sessionName).text;
       render();
       requestAnimationFrame(() => document.getElementById("prayer-draft")?.focus());
@@ -3411,11 +3512,31 @@
       state.prayerCompose = "";
       state.prayerHistoryOpen = false;
       state.prayerClearAsk = false;
+      state.prayerDeleteAsk = false;
       state.prayerError = "";
       state.selectedMember = null;
       state.tab = "members";
       location.hash = "members";
       render();
+      return;
+    }
+    if (action === "ask-delete-prayer") {
+      if (!state.prayerReady || !prayerOf(state.sessionName).text) return;
+      state.prayerDeleteAsk = true;
+      state.prayerError = "";
+      render();
+      return;
+    }
+    if (action === "stay-delete-prayer") return;
+    if (action === "cancel-delete-prayer") {
+      if (state.prayerSaving) return;
+      state.prayerDeleteAsk = false;
+      state.prayerError = "";
+      render();
+      return;
+    }
+    if (action === "confirm-delete-prayer") {
+      deletePrayer();
       return;
     }
     if (action === "save-prayer") {

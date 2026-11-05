@@ -112,6 +112,24 @@ function savePrayer(data) {
       latestText = String(values[r][1] || "").trim();
     }
   }
+  if (mode === "delete") {
+    if (latestIndex === -1) return { ok: true, deleted: true, updated: "", text: "" };
+    var nextText = "";
+    var nextStamp = "";
+    var nextTime = -1;
+    for (var d = 1; d < values.length; d++) {
+      if (String(values[d][0]).trim() !== name) continue;
+      if (d + 1 === latestIndex) continue;
+      var when = prayerTime_(values[d][2]);
+      if (nextTime < 0 || when >= nextTime) {
+        nextTime = when;
+        nextText = String(values[d][1] || "").trim();
+        nextStamp = prayerStampText_(values[d][2]);
+      }
+    }
+    sheet.deleteRow(latestIndex);
+    return { ok: true, deleted: true, updated: nextStamp, text: nextText };
+  }
   if (mode === "new") {
     if (!text) return { ok: false, error: "empty" };
     if (text === latestText) return { ok: true, updated: now, unchanged: true };
@@ -123,6 +141,13 @@ function savePrayer(data) {
     sheet.appendRow([name, text, now]);
   } else sheet.getRange(latestIndex, 1, 1, 3).setValues([[name, text, now]]);
   return { ok: true, updated: now };
+}
+
+function prayerStampText_(value) {
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, "Asia/Seoul", "yyyy-MM-dd HH:mm");
+  }
+  return String(value || "").trim();
 }
 
 function prayerTime_(value) {
