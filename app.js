@@ -74,6 +74,7 @@
     memberQuery: "",
     selectedMember: null,
     memberSheetPaged: false,
+    memberSheetFrom: "",
     prayers: {},
     prayerReady: false,
     prayerDraft: "",
@@ -1739,7 +1740,7 @@
     const creating = state.prayerCompose === "new";
     const saveLabel = state.prayerSaving ? (ask ? "지우는 중" : "저장하고 있어요") : ask ? "지우기" : creating ? "남기기" : "저장";
     return `
-      <textarea id="prayer-draft"
+      <textarea id="prayer-draft" data-sheet-scroll
         class="mt-4 min-h-[12rem] w-full flex-1 resize-none rounded-2xl border border-stone-200 bg-cream px-4 py-3 text-[15px] leading-relaxed outline-none focus:border-terra"
         placeholder="${creating ? "새로 기도할 내용을 적어 주세요" : "함께 기도할 내용을 적어 주세요"}">${esc(state.prayerDraft)}</textarea>
       ${state.prayerError ? `<p class="mt-2 shrink-0 text-[13px] text-terra">${esc(state.prayerError)}</p>` : ""}
@@ -1809,7 +1810,7 @@
         ${
           dates.length
             ? `<div class="-mx-5 shrink-0 border-b border-stone-200/80" style="box-shadow: 0 6px 10px -6px rgba(28,25,23,0.22)">
-                <div class="flex gap-5 overflow-x-auto hide-scroll px-5">
+                <div data-sheet-scroll class="flex gap-5 overflow-x-auto overscroll-x-contain hide-scroll px-5">
                 ${dates
                   .map((date) => {
                     const on = date.label === selected;
@@ -1820,7 +1821,7 @@
               </div>`
             : ""
         }
-        <div id="prayer-history-scroll" class="min-h-0 flex-1 overflow-y-auto hide-scroll pt-1">
+        <div id="prayer-history-scroll" data-sheet-scroll class="min-h-0 flex-1 overflow-y-auto overscroll-y-contain hide-scroll pt-1" style="touch-action: pan-y">
           ${prayerHistoryPreview() ? `<p class="pb-1 text-[12px] text-muted">화면 예시입니다</p>` : ""}
           ${prayerHistoryBody(prayer)}
           ${entries.length > 1 ? `<div style="height: 100vh" aria-hidden="true"></div>` : ""}
@@ -1846,20 +1847,34 @@
     return `<button type="button" data-action="open-prayer-history" class="mt-4 flex h-[44px] w-full shrink-0 items-center justify-center gap-0.5 text-[14px] font-medium text-sage active:opacity-60"><span>지난 기도제목</span>${iconChevron("right", "h-4 w-4 shrink-0")}</button>`;
   }
 
-  function memberNav() {
+  function memberNav(updated = "") {
     const prev = neighborMember(-1);
     const next = neighborMember(1);
-    if (!prev || !next) return "";
+    const stamp = updated
+      ? `<p class="shrink-0 px-1 text-center text-[12px] leading-snug text-muted">마지막 업데이트<br>${esc(updated)}</p>`
+      : "";
+    if (!prev || !next) {
+      return updated
+        ? `<p class="mt-4 shrink-0 text-center text-[12px] leading-snug text-muted">마지막 업데이트 ${esc(updated)}</p>`
+        : "";
+    }
+    const side =
+      "flex max-w-full min-w-0 items-center gap-0.5 rounded-full border border-stone-200 bg-ivory py-1 text-muted active:bg-cream";
     return `
-      <div class="mt-3 flex shrink-0 items-center justify-between gap-2">
-        <button type="button" data-action="member-prev" class="flex max-w-[46%] items-center gap-0.5 rounded-full border border-stone-200 py-1 pl-1.5 pr-2.5 text-muted active:bg-cream">
-          ${iconChevron("left")}
-          <span class="min-w-0 truncate text-[13px] font-medium">${esc(prev.name)}</span>
-        </button>
-        <button type="button" data-action="member-next" class="flex max-w-[46%] items-center gap-0.5 rounded-full border border-stone-200 py-1 pl-2.5 pr-1.5 text-muted active:bg-cream">
-          <span class="min-w-0 truncate text-[13px] font-medium">${esc(next.name)}</span>
-          ${iconChevron("right")}
-        </button>
+      <div class="mt-4 flex shrink-0 items-center gap-2">
+        <div class="flex min-w-0 flex-1 justify-start">
+          <button type="button" data-action="member-prev" class="${side} pl-1.5 pr-2.5">
+            ${iconChevron("left")}
+            <span class="min-w-0 truncate text-[13px] font-medium">${esc(prev.name)}</span>
+          </button>
+        </div>
+        ${stamp}
+        <div class="flex min-w-0 flex-1 justify-end">
+          <button type="button" data-action="member-next" class="${side} pl-2.5 pr-1.5">
+            <span class="min-w-0 truncate text-[13px] font-medium">${esc(next.name)}</span>
+            ${iconChevron("right")}
+          </button>
+        </div>
       </div>`;
   }
 
@@ -2025,8 +2040,10 @@
     const m = state.selectedMember;
     if (!m) return "";
     const prayer = prayerOf(m.name);
-    const body = state.prayerReady ? prayerReadBody(prayer) : prayerMissingBody();
-    const anim = state.memberSheetPaged ? "" : "sheet-up";
+    const body = state.prayerReady ? prayerReadBody(prayer, "아직 기도제목이 없어요", false) : prayerMissingBody();
+    const from = state.memberSheetFrom;
+    state.memberSheetFrom = "";
+    const anim = from === "right" ? "sheet-from-right" : from === "left" ? "sheet-from-left" : state.memberSheetPaged ? "" : "sheet-up";
     const place = "inset-x-0 bottom-0 h-auto max-h-[92dvh]";
     return `
       <div id="member-sheet-backdrop" class="absolute inset-0 z-40 bg-ink/30" data-action="close-member"></div>
@@ -2049,9 +2066,9 @@
         </div>
         <div class="mt-5 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-stone-100 pt-5">
           <h2 class="shrink-0 text-[16px] font-semibold">기도제목</h2>
-          <div class="min-h-0 overflow-y-auto hide-scroll">${body}</div>
+          <div data-sheet-scroll class="min-h-0 overflow-y-auto overscroll-y-contain hide-scroll" style="touch-action: pan-y">${body}</div>
         </div>
-        ${memberNav()}
+        ${memberNav(state.prayerReady ? prayer.updated : "")}
       </div>`;
   }
 
@@ -2089,7 +2106,7 @@
             ? `<div class="flex min-h-0 flex-1 flex-col">${prayerEditorFields()}</div>`
             : history
               ? prayerHistoryPanel(mine)
-              : `<div class="mt-3 min-h-0 overflow-y-auto hide-scroll border-t border-stone-100 pt-3">${state.prayerReady ? prayerReadBody(mine, "아직 적은 기도제목이 없습니다", false) : prayerMissingBody()}</div>
+              : `<div data-sheet-scroll class="mt-3 min-h-0 overflow-y-auto overscroll-y-contain hide-scroll border-t border-stone-100 pt-3" style="touch-action: pan-y">${state.prayerReady ? prayerReadBody(mine, "아직 적은 기도제목이 없습니다", false) : prayerMissingBody()}</div>
               ${state.prayerReady ? `${prayerHistoryLink()}
               <button type="button" data-action="open-member-prayers" class="mt-1 flex min-h-[52px] w-full shrink-0 items-center justify-center gap-1 rounded-2xl bg-terra px-4 py-3 text-[15px] font-semibold text-ivory active:opacity-90">
                 <span>사랑동산을 위해 기도하기</span>
@@ -2118,6 +2135,7 @@
       appEl.innerHTML = loginView() + toastView();
       bind();
       bindSheetDrag("name-picker", "name-picker-backdrop", "close-name-picker", { handleOnly: true });
+      bindSheetScrollGuard("name-picker", "name-picker-backdrop");
       return;
     }
 
@@ -2130,9 +2148,10 @@
     else if (state.tab === "links") body = linksView();
     else body = homeView(today, range);
 
+    const backgroundLocked = Boolean(state.selectedMember || state.prayerEditOpen);
     appEl.innerHTML = `
       <div class="flex h-full min-h-0 flex-col overflow-hidden bg-cream">
-        <div id="main-scroll" class="min-h-0 flex-1 overflow-y-auto hide-scroll overscroll-y-contain pb-4">
+        <div id="main-scroll" class="min-h-0 flex-1 hide-scroll overscroll-y-contain pb-4 ${backgroundLocked ? "overflow-hidden" : "overflow-y-auto"}">
           <div id="pull-indicator" class="flex items-center justify-center overflow-hidden" style="height:0">
             <div id="pull-badge" class="flex h-10 w-10 items-center justify-center rounded-full border border-terra/40 bg-ivory text-terra shadow-sm">
               <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
@@ -2152,7 +2171,9 @@
     bindPullToRefresh();
     bindSheetDrag("member-sheet", "member-sheet-backdrop", "close-member", { handleOnly: true });
     bindMemberSwipe();
+    bindSheetScrollGuard("member-sheet", "member-sheet-backdrop");
     bindSheetDrag("prayer-edit-sheet", "prayer-edit-backdrop", "close-prayer-edit", { handleOnly: true });
+    bindSheetScrollGuard("prayer-edit-sheet", "prayer-edit-backdrop");
     if (scheduleStickyObserver) {
       scheduleStickyObserver.disconnect();
       scheduleStickyObserver = null;
@@ -2243,30 +2264,116 @@
     sheet.addEventListener("pointercancel", end);
   }
 
+  function bindSheetScrollGuard(sheetId, backdropId) {
+    const sheet = document.getElementById(sheetId);
+    const backdrop = document.getElementById(backdropId);
+    if (backdrop) {
+      backdrop.addEventListener(
+        "touchmove",
+        (event) => {
+          if (event.cancelable) event.preventDefault();
+        },
+        { passive: false }
+      );
+      backdrop.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+        },
+        { passive: false }
+      );
+    }
+    if (!sheet) return;
+    let startX = 0;
+    let startY = 0;
+    sheet.addEventListener(
+      "touchstart",
+      (event) => {
+        if (event.touches.length !== 1) return;
+        startX = event.touches[0].clientX;
+        startY = event.touches[0].clientY;
+      },
+      { passive: true }
+    );
+    sheet.addEventListener(
+      "touchmove",
+      (event) => {
+        if (event.touches.length !== 1) return;
+        const dx = event.touches[0].clientX - startX;
+        const dy = event.touches[0].clientY - startY;
+        const horizontal = Math.abs(dx) > Math.abs(dy);
+        const scroller = event.target.closest("[data-sheet-scroll]");
+        if (scroller) {
+          const canScrollY = scroller.scrollHeight > scroller.clientHeight + 1;
+          const canScrollX = scroller.scrollWidth > scroller.clientWidth + 1;
+          if (horizontal && canScrollX) return;
+          if (!horizontal && canScrollY) {
+            const atTop = scroller.scrollTop <= 0;
+            const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+            if ((atTop && dy > 0) || (atBottom && dy < 0)) {
+              if (event.cancelable) event.preventDefault();
+            }
+            return;
+          }
+        }
+        if (event.cancelable) event.preventDefault();
+      },
+      { passive: false }
+    );
+    sheet.addEventListener(
+      "wheel",
+      (event) => {
+        const scroller = event.target.closest("[data-sheet-scroll]");
+        if (!scroller) {
+          event.preventDefault();
+          return;
+        }
+        const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+        if (horizontal && scroller.scrollWidth > scroller.clientWidth + 1) return;
+        const atTop = scroller.scrollTop <= 0;
+        const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+        const stuck =
+          scroller.scrollHeight <= scroller.clientHeight + 1 ||
+          (event.deltaY < 0 && atTop) ||
+          (event.deltaY > 0 && atBottom);
+        if (stuck) event.preventDefault();
+      },
+      { passive: false }
+    );
+  }
+
   function bindMemberSwipe() {
     const sheet = document.getElementById("member-sheet");
-    if (!sheet || state.prayerEditing || state.members.length < 2) return;
+    if (!sheet || state.members.length < 2) return;
     let startX = 0;
     let startY = 0;
     let dx = 0;
     let mode = "";
     let pointerId = null;
+    let leaving = false;
+    let lastX = 0;
+    let lastT = 0;
+    let velocity = 0;
 
-    function reset() {
+    function snapBack() {
       mode = "";
       pointerId = null;
       dx = 0;
-      sheet.style.transition = "transform 0.2s ease";
-      sheet.style.transform = "";
+      sheet.style.transition = "transform 0.22s ease";
+      sheet.style.transform = "translateX(0)";
     }
 
     sheet.addEventListener("pointerdown", (event) => {
-      if (event.target.closest("button, textarea, [data-sheet-handle]")) return;
+      if (leaving || (event.button != null && event.button !== 0)) return;
+      if (event.target.closest("button, a, textarea, input, [data-sheet-handle]")) return;
       mode = "pending";
       pointerId = event.pointerId;
       startX = event.clientX;
       startY = event.clientY;
       dx = 0;
+      velocity = 0;
+      lastX = event.clientX;
+      lastT = event.timeStamp;
     });
 
     sheet.addEventListener(
@@ -2276,13 +2383,13 @@
         const moveX = event.clientX - startX;
         const moveY = event.clientY - startY;
         if (mode === "pending") {
-          if (Math.abs(moveX) < 12 && Math.abs(moveY) < 12) return;
-          if (Math.abs(moveY) >= Math.abs(moveX) * 0.9) {
+          if (Math.abs(moveX) < 8 && Math.abs(moveY) < 8) return;
+          if (Math.abs(moveX) < Math.abs(moveY) * 1.2) {
             mode = "";
             return;
           }
           mode = "swipe";
-          sheet.classList.remove("sheet-up");
+          sheet.classList.remove("sheet-up", "sheet-from-left", "sheet-from-right");
           sheet.style.transition = "none";
           try {
             sheet.setPointerCapture(event.pointerId);
@@ -2292,26 +2399,58 @@
         }
         if (mode !== "swipe") return;
         dx = moveX;
+        const dt = event.timeStamp - lastT;
+        if (dt >= 8) velocity = (event.clientX - lastX) / dt;
+        lastX = event.clientX;
+        lastT = event.timeStamp;
         if (event.cancelable) event.preventDefault();
-        sheet.style.transform = `translateX(${dx * 0.35}px)`;
+        const width = sheet.getBoundingClientRect().width || 1;
+        const shown = Math.max(-width, Math.min(width, dx));
+        sheet.style.transform = `translateX(${shown}px)`;
       },
       { passive: false }
     );
 
     function finish(event) {
-      if (!mode || event.pointerId !== pointerId) return;
-      const swiped = mode === "swipe" && Math.abs(dx) > 56;
+      if (event.pointerId !== pointerId) return;
+      if (mode !== "swipe") {
+        mode = "";
+        pointerId = null;
+        return;
+      }
+      const width = sheet.getBoundingClientRect().width || 1;
+      const sameWay = Math.sign(velocity) === Math.sign(dx) && dx !== 0;
+      const flick = sameWay && Math.abs(velocity) > 0.65 && Math.abs(dx) > 36;
+      const passed = Math.abs(dx) > Math.min(72, width * 0.22);
+      if (!flick && !passed) {
+        snapBack();
+        return;
+      }
       const goNext = dx < 0;
-      reset();
-      if (!swiped) return;
       const next = neighborMember(goNext ? 1 : -1);
-      if (next) selectMember(next.name, { paged: true, keepScroll: true });
+      if (!next) {
+        snapBack();
+        return;
+      }
+      leaving = true;
+      mode = "";
+      pointerId = null;
+      sheet.style.transition = "transform 0.18s ease";
+      sheet.style.transform = `translateX(${goNext ? -width : width}px)`;
+      window.setTimeout(() => {
+        state.memberSheetFrom = goNext ? "right" : "left";
+        selectMember(next.name, { paged: true, keepScroll: true });
+      }, 160);
     }
 
     sheet.addEventListener("pointerup", finish);
     sheet.addEventListener("pointercancel", (event) => {
-      if (event.pointerId !== pointerId) return;
-      reset();
+      if (event.pointerId !== pointerId || leaving) return;
+      if (mode === "swipe") snapBack();
+      else {
+        mode = "";
+        pointerId = null;
+      }
     });
   }
 
@@ -2525,6 +2664,7 @@
       state.memberQuery = "";
       state.selectedMember = null;
       state.memberSheetPaged = false;
+      state.memberSheetFrom = "";
       state.prayerEditOpen = false;
       state.prayerEditing = false;
       state.prayerCompose = "";
@@ -2559,12 +2699,16 @@
     }
     if (action === "member-prev" || action === "member-next") {
       const next = neighborMember(action === "member-prev" ? -1 : 1);
-      if (next) selectMember(next.name, { paged: true, keepScroll: true });
+      if (next) {
+        state.memberSheetFrom = action === "member-next" ? "right" : "left";
+        selectMember(next.name, { paged: true, keepScroll: true });
+      }
       return;
     }
     if (action === "close-member") {
       state.selectedMember = null;
       state.memberSheetPaged = false;
+      state.memberSheetFrom = "";
       state.prayerEditing = false;
       state.prayerCompose = "";
       state.prayerHistoryOpen = false;

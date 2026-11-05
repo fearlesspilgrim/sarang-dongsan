@@ -45,6 +45,7 @@
       html,
       body {
         height: 100%;
+        overflow: hidden;
         background: #f6f1ea;
       }
       body {
@@ -102,10 +103,32 @@
       .sheet-up {
         animation: sheet-up 0.22s ease-out;
       }
+      @keyframes sheet-from-right {
+        from {
+          transform: translateX(100%);
+        }
+        to {
+          transform: translateX(0);
+        }
+      }
+      @keyframes sheet-from-left {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(0);
+        }
+      }
+      .sheet-from-right {
+        animation: sheet-from-right 0.22s ease-out;
+      }
+      .sheet-from-left {
+        animation: sheet-from-left 0.22s ease-out;
+      }
     </style>
   </head>
   <body class="font-sans text-ink antialiased">
     <div id="app" class="relative mx-auto h-dvh w-full max-w-[430px] overflow-hidden bg-cream shadow-[0_0_0_1px_rgba(28,25,23,0.04)]"></div>
-    <script src="./app.js?v=62"></script>
+    <script src="./app.js?v=63"></script>
   </body>
 </html>
