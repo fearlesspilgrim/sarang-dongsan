@@ -2278,7 +2278,7 @@
     const prev = neighborMember(-1);
     const next = neighborMember(1);
     const stamp = updated
-      ? `<p class="shrink-0 px-1 text-center text-[12px] leading-snug text-muted">마지막 업데이트<br>${esc(updated)}</p>`
+      ? `<p class="shrink-0 whitespace-nowrap px-1 text-center text-[12px] text-muted">마지막 업데이트 ${esc(updated)}</p>`
       : "";
     if (!prev || !next) {
       return updated
