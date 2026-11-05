@@ -800,13 +800,13 @@
     }
     state.prayerSaving = true;
     state.prayerError = "";
-    renderKeepingScroll();
+    mountPrayerDeleteDialog();
     try {
       const result = await postPrayer(current.text, "delete");
       if (!result?.deleted) {
         state.prayerSaving = false;
         state.prayerError = "시트에서 지우지 못했어요";
-        renderKeepingScroll();
+        mountPrayerDeleteDialog();
         return;
       }
       applyDeletedPrayer(state.sessionName, result.text, result.updated);
@@ -821,7 +821,7 @@
       state.prayerSaving = false;
       state.prayerError =
         err?.message === "auth" ? "이 이름으로는 시트에 남길 수 없어요" : "시트에서 지우지 못했어요";
-      renderKeepingScroll();
+      mountPrayerDeleteDialog();
     }
   }
 
@@ -2240,7 +2240,7 @@
     const saveLabel = state.prayerSaving ? (ask ? "지우는 중" : "저장하고 있어요") : ask ? "지우기" : creating ? "남기기" : "저장";
     return `
       <textarea id="prayer-draft" data-sheet-scroll
-        class="mt-4 min-h-[12rem] w-full flex-1 resize-none rounded-2xl border border-stone-200 bg-cream px-4 py-3 text-[15px] leading-relaxed outline-none focus:border-terra"
+        class="mt-4 min-h-[12rem] w-full flex-1 resize-none rounded-2xl border border-stone-200 bg-cream px-4 py-3 text-base leading-relaxed outline-none focus:border-terra"
         placeholder="${creating ? "새로 기도할 내용을 적어 주세요" : "함께 기도할 내용을 적어 주세요"}">${esc(state.prayerDraft)}</textarea>
       ${state.prayerError ? `<p class="mt-2 shrink-0 text-[13px] text-terra">${esc(state.prayerError)}</p>` : ""}
       ${
@@ -2351,7 +2351,7 @@
     if (!state.prayerDeleteAsk) return "";
     const busy = state.prayerSaving;
     return `
-      <div class="absolute inset-0 z-[70] flex items-center justify-center bg-ink/45 px-7" data-action="cancel-delete-prayer">
+      <div id="prayer-delete-dialog" class="absolute inset-0 z-[70] flex items-center justify-center bg-ink/45 px-7" data-action="cancel-delete-prayer">
         <div class="w-full rounded-[22px] bg-ivory px-5 pb-4 pt-6 shadow-sheet" role="dialog" aria-labelledby="prayer-delete-title" data-action="stay-delete-prayer">
           <h2 id="prayer-delete-title" class="text-[17px] font-semibold">이 기도제목을 지울까요?</h2>
           <p class="mt-2 text-[14px] leading-relaxed text-muted">지난 기도제목이 내 기도제목이 됩니다.</p>
@@ -2603,14 +2603,14 @@
     const sub = history || !state.prayerReady
       ? ""
       : creating
-          ? "저장하면 지금 글은 지난 기도제목이 됩니다"
+          ? "저장하면 기도제목이 사랑동산에게 보여지게 됩니다."
           : mine.updated
             ? `마지막 업데이트 ${mine.updated}`
             : "구성원들과 함께 기도할 내용입니다";
     const tall = editing || history;
     return `
       <div id="prayer-edit-backdrop" class="absolute inset-0 z-40 bg-ink/30" data-action="close-prayer-edit"></div>
-      <div id="prayer-edit-sheet" class="absolute ${tall ? "inset-x-0 top-4 bottom-0" : "inset-x-0 bottom-0 h-auto max-h-[92dvh]"} z-50 flex flex-col overflow-hidden rounded-t-[28px] bg-ivory px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-1 shadow-sheet ${tall ? "" : "sheet-up"}">
+      <div id="prayer-edit-sheet" class="absolute ${tall ? "inset-x-0 top-4 bottom-0" : "inset-x-0 bottom-0 h-auto max-h-[92dvh]"} z-50 flex flex-col overflow-hidden rounded-t-[28px] bg-ivory px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-1 shadow-sheet ${tall || prayerSheetSettled ? "" : "sheet-up"}">
         <div data-sheet-handle class="-mx-5 flex h-8 shrink-0 items-center justify-center" style="touch-action: none" aria-hidden="true">
           <span class="h-1 w-10 rounded-full bg-stone-300"></span>
         </div>
@@ -2644,6 +2644,7 @@
   }
 
   function render() {
+    prayerSheetSettled = Boolean(state.prayerEditOpen && document.getElementById("prayer-edit-sheet"));
     captureScheduleScroll();
     if (state.status === "loading") {
       appEl.innerHTML = skeleton();
@@ -2728,6 +2729,20 @@
   }
 
   let restoreScroll = null;
+  let prayerSheetSettled = false;
+
+  function mountPrayerDeleteDialog() {
+    const current = document.getElementById("prayer-delete-dialog");
+    if (!state.prayerDeleteAsk) {
+      current?.remove();
+      return;
+    }
+    const html = prayerDeleteDialog();
+    if (current) current.outerHTML = html;
+    else appEl.insertAdjacentHTML("beforeend", html);
+    const next = document.getElementById("prayer-delete-dialog");
+    if (next) bindList(next);
+  }
 
   function renderKeepingScroll() {
     const scroller = document.getElementById("main-scroll");
@@ -3524,7 +3539,7 @@
       if (!state.prayerReady || !prayerOf(state.sessionName).text) return;
       state.prayerDeleteAsk = true;
       state.prayerError = "";
-      render();
+      mountPrayerDeleteDialog();
       return;
     }
     if (action === "stay-delete-prayer") return;
@@ -3532,7 +3547,7 @@
       if (state.prayerSaving) return;
       state.prayerDeleteAsk = false;
       state.prayerError = "";
-      render();
+      mountPrayerDeleteDialog();
       return;
     }
     if (action === "confirm-delete-prayer") {
