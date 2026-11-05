@@ -576,6 +576,7 @@
       d: Number(match[3]),
       hour,
       minute,
+      hasTime: match[5] != null,
     };
   }
 
@@ -592,7 +593,11 @@
 
   function prayerUpdatedLabel(item) {
     const stamp = prayerStamp(item);
-    if (stamp) return `${stamp.m}월 ${stamp.d}일`;
+    if (stamp) {
+      const day = `${stamp.m}월 ${stamp.d}일`;
+      if (!stamp.hasTime) return day;
+      return `${day} ${stamp.hour}:${String(stamp.minute).padStart(2, "0")}`;
+    }
     const date = parseGvizDate(item?.v, item?.f);
     return date?.m ? `${date.m}월 ${date.d}일` : "";
   }
