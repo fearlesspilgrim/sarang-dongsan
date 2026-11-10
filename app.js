@@ -593,6 +593,32 @@
     return date?.m ? `${date.m}월 ${date.d}일` : "";
   }
 
+  function prayerAgo(prayer) {
+    const text = String(prayer?.text || "").trim();
+    if (!text) return { label: "없음", tone: "text-stone-400" };
+    const time = Number(prayer?.time);
+    const then = new Date(time);
+    if (!Number.isFinite(time) || Number.isNaN(then.getTime()) || then.getFullYear() < 2000) {
+      return { label: "", tone: "text-stone-400" };
+    }
+    const now = new Date();
+    const diff = now.getTime() - time;
+    if (diff < 60 * 1000) return { label: "방금", tone: "text-sage" };
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 60) return { label: `${minutes}분 전`, tone: "text-sage" };
+    const hours = Math.floor(minutes / 60);
+    if (hours < 12) return { label: `${hours}시간 전`, tone: "text-sage" };
+    const dayStart = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const dayDiff = Math.round((dayStart(now) - dayStart(then)) / 86400000);
+    if (dayDiff <= 0) return { label: "오늘", tone: "text-sage" };
+    if (dayDiff === 1) return { label: "어제", tone: "text-muted" };
+    if (dayDiff < 7) return { label: `${dayDiff}일 전`, tone: "text-muted" };
+    if (dayDiff < 28) return { label: `${Math.floor(dayDiff / 7)}주 전`, tone: "text-muted" };
+    let months = (now.getFullYear() - then.getFullYear()) * 12 + (now.getMonth() - then.getMonth());
+    if (now.getDate() < then.getDate()) months -= 1;
+    return { label: `${Math.max(1, months)}달 전`, tone: "text-muted" };
+  }
+
   function memberIndexOf(name) {
     return state.members.findIndex((item) => item.name === name);
   }
@@ -1303,16 +1329,20 @@
       <div class="grid grid-cols-2 gap-2">
         ${list
           .map((m) => {
+            const ago = state.prayerReady ? prayerAgo(prayerOf(m.name)) : { label: "", tone: "text-stone-400" };
             return `
             <button data-action="open-member" data-name="${esc(m.name)}" class="flex h-full items-center gap-1 rounded-[24px] border border-stone-200/80 bg-ivory py-3 pl-3.5 pr-2.5 text-left active:bg-cream">
               <span class="min-w-0 flex-1">
-                <span class="flex flex-wrap items-center gap-1">
-                  <span class="text-[16px] font-medium">${esc(m.name)}</span>
-                  ${m.role ? `<span class="shrink-0 rounded-full border border-terra/30 px-1.5 py-0.5 text-[10px] font-medium leading-none text-terra">${esc(m.role)}</span>` : ""}
-                </span>
-                <span class="mt-1 block text-[12px] text-muted">${esc(m.peer)}또래 · ${formatMd(m.birth) || "생일 미등록"}</span>
+                <span class="block whitespace-nowrap text-[16px] font-medium">${esc(m.name)}</span>
+                <span class="mt-1 block text-[12px] text-muted">${esc(m.peer)}또래</span>
               </span>
-              <span class="shrink-0 text-stone-400">${iconPray()}</span>
+              <span class="flex shrink-0 flex-col items-center text-stone-400">
+                ${iconPray()}
+                <span class="mt-1 grid whitespace-nowrap text-center text-[10px] font-medium leading-3 ${ago.tone}">
+                  <span class="invisible col-start-1 row-start-1" aria-hidden="true">11시간 전</span>
+                  <span class="col-start-1 row-start-1">${esc(ago.label)}</span>
+                </span>
+              </span>
             </button>`;
           })
           .join("")}
